@@ -1,10 +1,4 @@
-"""
-Baseline for machine learning project on road segmentation.
-This simple baseline consits of a CNN with two convolutional+pooling layers with a soft-max loss
-
-Credits: Aurelien Lucchi, ETH Zürich
-"""
-
+import glob
 import os
 import sys
 
@@ -16,7 +10,7 @@ from PIL import Image
 NUM_CHANNELS = 3  # RGB images
 PIXEL_DEPTH = 255
 NUM_LABELS = 2
-TRAINING_SIZE = 20
+TRAINING_SIZE = 100
 VALIDATION_SIZE = 5  # Size of the validation set.
 SEED = 66478  # Set to None for random seed.
 BATCH_SIZE = 16  # 64
@@ -32,6 +26,13 @@ IMG_PATCH_SIZE = 16
 tf.app.flags.DEFINE_string('train_dir', '/tmp/mnist',
                            """Directory where to write event logs """
                            """and checkpoint.""")
+
+tf.app.flags.DEFINE_string('train_data_dir', './data/training',
+                           """Directory containing training images/ groundtruth/""")
+
+tf.app.flags.DEFINE_string('eval_data_dir', None,
+                           """Directory containing eval images""")
+
 FLAGS = tf.app.flags.FLAGS
 
 
@@ -189,9 +190,9 @@ def make_img_overlay(img, predicted_img):
 
 def main(argv=None):  # pylint: disable=unused-argument
 
-    data_dir = 'data/training/'
-    train_data_filename = data_dir + 'images/'
-    train_labels_filename = data_dir + 'groundtruth/'
+    data_dir = FLAGS.train_data_dir
+    train_data_filename = os.path.join(data_dir, 'images/')
+    train_labels_filename = os.path.join(data_dir, 'groundtruth/')
 
     # Extract it into numpy arrays.
     train_data = extract_data(train_data_filename, TRAINING_SIZE)
@@ -298,11 +299,14 @@ def main(argv=None):  # pylint: disable=unused-argument
         return img_prediction
 
     # Get a concatenation of the prediction and groundtruth for given input file
-    def get_prediction_with_groundtruth(filename, image_idx):
+    def get_prediction_with_groundtruth(filename, image_idx=None):
 
-        imageid = "satImage_%.3d" % image_idx
-        image_filename = filename + imageid + ".png"
-        img = mpimg.imread(image_filename)
+        if image_idx:
+            imageid = "satImage_%.3d" % image_idx
+            image_filename = filename + imageid + ".png"
+            img = mpimg.imread(image_filename)
+        else:
+            img = mpimg.imread(filename)
 
         img_prediction = get_prediction(img)
         cimg = concatenate_images(img, img_prediction)
@@ -310,11 +314,14 @@ def main(argv=None):  # pylint: disable=unused-argument
         return cimg
 
     # Get prediction overlaid on the original image for given input file
-    def get_prediction_with_overlay(filename, image_idx):
+    def get_prediction_with_overlay(filename, image_idx=None):
 
-        imageid = "satImage_%.3d" % image_idx
-        image_filename = filename + imageid + ".png"
-        img = mpimg.imread(image_filename)
+        if image_idx:
+            imageid = "satImage_%.3d" % image_idx
+            image_filename = filename + imageid + ".png"
+            img = mpimg.imread(image_filename)
+        else:
+            img = mpimg.imread(filename)
 
         img_prediction = get_prediction(img)
         oimg = make_img_overlay(img, img_prediction)
@@ -515,6 +522,18 @@ def main(argv=None):  # pylint: disable=unused-argument
             Image.fromarray(pimg).save(prediction_training_dir + "prediction_" + str(i) + ".png")
             oimg = get_prediction_with_overlay(train_data_filename, i)
             oimg.save(prediction_training_dir + "overlay_" + str(i) + ".png")
+
+        if FLAGS.eval_data_dir:
+            print("Running prediction on evaluation set")
+            prediction_eval_dir = "predictions_eval/"
+            pattern = FLAGS.eval_data_dir + "/*.png"
+            if not os.path.isdir(prediction_eval_dir):
+                os.mkdir(prediction_eval_dir)
+            for i, file in enumerate(glob.glob(pattern)):
+                pimg = get_prediction_with_groundtruth(file)
+                Image.fromarray(pimg).save(prediction_eval_dir + "prediction_" + str(i) + ".png")
+                oimg = get_prediction_with_overlay(file)
+                oimg.save(prediction_eval_dir + "overlay_" + str(i) + ".png")
 
 
 if __name__ == '__main__':
