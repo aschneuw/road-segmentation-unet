@@ -448,12 +448,12 @@ def main(argv=None):  # pylint: disable=unused-argument
 
         else:
             # Run all the initializers to prepare the trainable parameters.
-            tf.initialize_all_variables().run()
+            tf.global_variables_initializer().run()
 
             # Build the summary operation based on the TF collection of Summaries.
             summary_op = tf.summary.merge_all()
             summary_writer = tf.summary.FileWriter(FLAGS.train_dir,
-                                                    graph_def=s.graph_def)
+                                                   graph=s.graph)
             print('Initialized!')
             # Loop through training steps.
             print('Total number of iterations = ' + str(int(num_epochs * train_size / BATCH_SIZE)))
