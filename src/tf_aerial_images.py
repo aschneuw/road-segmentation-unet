@@ -7,6 +7,8 @@ import numpy
 import tensorflow as tf
 from PIL import Image
 
+from .images import img_crop, img_float_to_uint8
+
 NUM_CHANNELS = 3  # RGB images
 PIXEL_DEPTH = 255
 NUM_LABELS = 2
@@ -36,22 +38,6 @@ tf.app.flags.DEFINE_string('eval_data_dir', None,
 FLAGS = tf.app.flags.FLAGS
 
 
-# Extract patches from a given image
-def img_crop(im, w, h):
-    list_patches = []
-    imgwidth = im.shape[0]
-    imgheight = im.shape[1]
-    is_2d = len(im.shape) < 3
-    for i in range(0, imgheight, h):
-        for j in range(0, imgwidth, w):
-            if is_2d:
-                im_patch = im[j:j + w, i:i + h]
-            else:
-                im_patch = im[j:j + w, i:i + h, :]
-            list_patches.append(im_patch)
-    return list_patches
-
-
 def extract_data(filename, num_images):
     """Extract the images into a 4D tensor [image index, y, x, channels].
     Values are rescaled from [0, 255] down to [-0.5, 0.5].
@@ -68,10 +54,6 @@ def extract_data(filename, num_images):
             print('File ' + image_filename + ' does not exist')
 
     num_images = len(imgs)
-    IMG_WIDTH = imgs[0].shape[0]
-    IMG_HEIGHT = imgs[0].shape[1]
-    N_PATCHES_PER_IMAGE = (IMG_WIDTH / IMG_PATCH_SIZE) * (IMG_HEIGHT / IMG_PATCH_SIZE)
-
     img_patches = [img_crop(imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE) for i in range(num_images)]
     data = [img_patches[i][j] for i in range(len(img_patches)) for j in range(len(img_patches[i]))]
 
@@ -126,53 +108,19 @@ def write_predictions_to_file(predictions, labels, filename):
     file = open(filename, "w")
     n = predictions.shape[0]
     for i in range(0, n):
-        file.write(max_labels(i) + ' ' + max_predictions(i))
+        file.write('{} {}'.format(max_labels[i], max_predictions[i]))
     file.close()
 
 
-# Print predictions from neural network
-def print_predictions(predictions, labels):
-    max_labels = numpy.argmax(labels, 1)
-    max_predictions = numpy.argmax(predictions, 1)
-    print(str(max_labels) + ' ' + str(max_predictions))
-
-
 # Convert array of labels to an image
-def label_to_img(imgwidth, imgheight, w, h, labels):
-    array_labels = numpy.zeros([imgwidth, imgheight])
+def label_to_img(img_width, img_height, w, h, labels):
+    array_labels = numpy.zeros([img_width, img_height])
     idx = 0
-    for i in range(0, imgheight, h):
-        for j in range(0, imgwidth, w):
-            if labels[idx][0] > 0.5:
-                l = 1
-            else:
-                l = 0
-            array_labels[j:j + w, i:i + h] = l
+    for i in range(0, img_height, h):
+        for j in range(0, img_width, w):
+            array_labels[j:j + w, i:i + h] = 1 if labels[idx][0] > 0.5 else 0
             idx = idx + 1
     return array_labels
-
-
-def img_float_to_uint8(img):
-    rimg = img - numpy.min(img)
-    rimg = (rimg / numpy.max(rimg) * PIXEL_DEPTH).round().astype(numpy.uint8)
-    return rimg
-
-
-def concatenate_images(img, gt_img):
-    nChannels = len(gt_img.shape)
-    w = gt_img.shape[0]
-    h = gt_img.shape[1]
-    if nChannels == 3:
-        cimg = numpy.concatenate((img, gt_img), axis=1)
-    else:
-        gt_img_3c = numpy.zeros((w, h, 3), dtype=numpy.uint8)
-        gt_img8 = img_float_to_uint8(gt_img)
-        gt_img_3c[:, :, 0] = gt_img8
-        gt_img_3c[:, :, 1] = gt_img8
-        gt_img_3c[:, :, 2] = gt_img8
-        img8 = img_float_to_uint8(img)
-        cimg = numpy.concatenate((img8, gt_img_3c), axis=1)
-    return cimg
 
 
 def make_img_overlay(img, predicted_img):
@@ -188,8 +136,7 @@ def make_img_overlay(img, predicted_img):
     return new_img
 
 
-def main(argv=None):  # pylint: disable=unused-argument
-
+def main():
     data_dir = FLAGS.train_data_dir
     train_data_filename = os.path.join(data_dir, 'images/')
     train_labels_filename = os.path.join(data_dir, 'groundtruth/')
@@ -266,27 +213,27 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Make an image summary for 4d tensor image with index idx
     def get_image_summary(img, idx=0):
-        V = tf.slice(img, (0, 0, 0, idx), (1, -1, -1, 1))
+        v = tf.slice(img, (0, 0, 0, idx), (1, -1, -1, 1))
         img_w = img.get_shape().as_list()[1]
         img_h = img.get_shape().as_list()[2]
-        min_value = tf.reduce_min(V)
-        V = V - min_value
-        max_value = tf.reduce_max(V)
-        V = V / (max_value * PIXEL_DEPTH)
-        V = tf.reshape(V, (img_w, img_h, 1))
-        V = tf.transpose(V, (2, 0, 1))
-        V = tf.reshape(V, (-1, img_w, img_h, 1))
-        return V
+        min_value = tf.reduce_min(v)
+        v = v - min_value
+        max_value = tf.reduce_max(v)
+        v = v / (max_value * PIXEL_DEPTH)
+        v = tf.reshape(v, (img_w, img_h, 1))
+        v = tf.transpose(v, (2, 0, 1))
+        v = tf.reshape(v, (-1, img_w, img_h, 1))
+        return v
 
     # Make an image summary for 3d tensor image with index idx
     def get_image_summary_3d(img):
-        V = tf.slice(img, (0, 0, 0), (1, -1, -1))
+        v = tf.slice(img, (0, 0, 0), (1, -1, -1))
         img_w = img.get_shape().as_list()[1]
         img_h = img.get_shape().as_list()[2]
-        V = tf.reshape(V, (img_w, img_h, 1))
-        V = tf.transpose(V, (2, 0, 1))
-        V = tf.reshape(V, (-1, img_w, img_h, 1))
-        return V
+        v = tf.reshape(v, (img_w, img_h, 1))
+        v = tf.transpose(v, (2, 0, 1))
+        v = tf.reshape(v, (-1, img_w, img_h, 1))
+        return v
 
     # Get prediction for given input image 
     def get_prediction(img):
@@ -298,27 +245,12 @@ def main(argv=None):  # pylint: disable=unused-argument
 
         return img_prediction
 
-    # Get a concatenation of the prediction and groundtruth for given input file
-    def get_prediction_with_groundtruth(filename, image_idx=None):
-
-        if image_idx:
-            imageid = "satImage_%.3d" % image_idx
-            image_filename = filename + imageid + ".png"
-            img = mpimg.imread(image_filename)
-        else:
-            img = mpimg.imread(filename)
-
-        img_prediction = get_prediction(img)
-        cimg = concatenate_images(img, img_prediction)
-
-        return cimg
-
     # Get prediction overlaid on the original image for given input file
     def get_prediction_with_overlay(filename, image_idx=None):
 
         if image_idx:
-            imageid = "satImage_%.3d" % image_idx
-            image_filename = filename + imageid + ".png"
+            image_basename = "satImage_%.3d" % image_idx
+            image_filename = filename + image_basename + ".png"
             img = mpimg.imread(image_filename)
         else:
             img = mpimg.imread(filename)
@@ -365,7 +297,6 @@ def main(argv=None):  # pylint: disable=unused-argument
         # print 'pool ' + str(pool.get_shape())
         # print 'pool2 ' + str(pool2.get_shape())
 
-
         # Reshape the feature map cuboid into a 2D matrix to feed it to the
         # fully connected layers.
         pool_shape = pool2.get_shape().as_list()
@@ -381,18 +312,18 @@ def main(argv=None):  # pylint: disable=unused-argument
         #    hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
         out = tf.matmul(hidden, fc2_weights) + fc2_biases
 
-        if train == True:
+        if train:
             summary_id = '_0'
             s_data = get_image_summary(data)
-            filter_summary0 = tf.summary.image('summary_data' + summary_id, s_data)
+            tf.summary.image('summary_data' + summary_id, s_data)
             s_conv = get_image_summary(conv)
-            filter_summary2 = tf.summary.image('summary_conv' + summary_id, s_conv)
+            tf.summary.image('summary_conv' + summary_id, s_conv)
             s_pool = get_image_summary(pool)
-            filter_summary3 = tf.summary.image('summary_pool' + summary_id, s_pool)
+            tf.summary.image('summary_pool' + summary_id, s_pool)
             s_conv2 = get_image_summary(conv2)
-            filter_summary4 = tf.summary.image('summary_conv2' + summary_id, s_conv2)
+            tf.summary.image('summary_conv2' + summary_id, s_conv2)
             s_pool2 = get_image_summary(pool2)
-            filter_summary5 = tf.summary.image('summary_pool2' + summary_id, s_pool2)
+            tf.summary.image('summary_pool2' + summary_id, s_pool2)
 
         return out
 
@@ -426,7 +357,7 @@ def main(argv=None):  # pylint: disable=unused-argument
     # Decay once per epoch, using an exponential schedule starting at 0.01.
     learning_rate = tf.train.exponential_decay(
         0.01,  # Base learning rate.
-        batch * BATCH_SIZE,  # Current index into the dataset.
+        BATCH_SIZE * batch,  # Current index into the dataset.
         train_size,  # Decay step.
         0.95,  # Decay rate.
         staircase=True)
@@ -495,8 +426,6 @@ def main(argv=None):  # pylint: disable=unused-argument
                         summary_writer.add_summary(summary_str, step)
                         summary_writer.flush()
 
-                        # print_predictions(predictions, batch_labels)
-
                         print('Epoch %.2f' % (float(step) * BATCH_SIZE / train_size))
                         print('Minibatch loss: %.3f, learning rate: %.6f' % (l, lr))
                         print('Minibatch error: %.1f%%' % error_rate(predictions,
@@ -518,8 +447,6 @@ def main(argv=None):  # pylint: disable=unused-argument
         if not os.path.isdir(prediction_training_dir):
             os.mkdir(prediction_training_dir)
         for i in range(1, TRAINING_SIZE + 1):
-            pimg = get_prediction_with_groundtruth(train_data_filename, i)
-            Image.fromarray(pimg).save(prediction_training_dir + "prediction_" + str(i) + ".png")
             oimg = get_prediction_with_overlay(train_data_filename, i)
             oimg.save(prediction_training_dir + "overlay_" + str(i) + ".png")
 
@@ -530,8 +457,6 @@ def main(argv=None):  # pylint: disable=unused-argument
             if not os.path.isdir(prediction_eval_dir):
                 os.mkdir(prediction_eval_dir)
             for i, file in enumerate(glob.glob(pattern)):
-                pimg = get_prediction_with_groundtruth(file)
-                Image.fromarray(pimg).save(prediction_eval_dir + "prediction_" + str(i) + ".png")
                 oimg = get_prediction_with_overlay(file)
                 oimg.save(prediction_eval_dir + "overlay_" + str(i) + ".png")
 
