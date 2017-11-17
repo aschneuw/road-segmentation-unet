@@ -7,7 +7,7 @@ import numpy
 import tensorflow as tf
 from PIL import Image
 
-from .images import img_crop, img_float_to_uint8
+from images import img_crop, img_float_to_uint8
 
 NUM_CHANNELS = 3  # RGB images
 PIXEL_DEPTH = 255
@@ -136,7 +136,7 @@ def make_img_overlay(img, predicted_img):
     return new_img
 
 
-def main():
+def main(argv):
     data_dir = FLAGS.train_data_dir
     train_data_filename = os.path.join(data_dir, 'images/')
     train_labels_filename = os.path.join(data_dir, 'groundtruth/')
