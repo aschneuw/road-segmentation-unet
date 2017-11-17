@@ -154,7 +154,6 @@ def main(argv):
     train_data = extract_data(train_data_filename, TRAINING_SIZE)
     train_labels = extract_labels(train_labels_filename, TRAINING_SIZE)
 
-    num_epochs = NUM_EPOCHS
 
     idx0 = (train_labels[:, 0] == 1).nonzero()[0]
     idx1 = (train_labels[:, 1] == 1).nonzero()[0]
@@ -388,11 +387,11 @@ def main(argv):
                                                    graph=s.graph)
             print('Initialized!')
             # Loop through training steps.
-            print('Total number of iterations = ' + str(int(num_epochs * train_size / BATCH_SIZE)))
+            print('Total number of iterations = ' + str(int(NUM_EPOCHS * train_size / BATCH_SIZE)))
 
             training_indices = range(train_size)
 
-            for iepoch in range(num_epochs):
+            for iepoch in range(NUM_EPOCHS):
 
                 # Permute training indices
                 perm_indices = numpy.random.permutation(training_indices)
