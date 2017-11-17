@@ -2,22 +2,21 @@ import glob
 import os
 import sys
 
-import matplotlib.image as mpimg
 import numpy
 import tensorflow as tf
 from PIL import Image
 
-from images import img_crop, img_float_to_uint8, load_images, extract_patches
+from images import load_images, extract_patches, overlay
+from mask_to_submission import masks_to_submission
 
 NUM_CHANNELS = 3  # RGB images
 PIXEL_DEPTH = 255
 NUM_LABELS = 2
-TRAINING_SIZE = 100
 VALIDATION_SIZE = 5  # Size of the validation set.
 SEED = 66478  # Set to None for random seed.
 BATCH_SIZE = 16  # 64
-NUM_EPOCHS = 5
-RESTORE_MODEL = False  # If True, restore existing model instead of training a new one
+NUM_EPOCHS = 10
+RESTORE_MODEL = True  # If True, restore existing model instead of training a new one
 RECORDING_STEP = 1000
 FOREGROUND_THRESHOLD = 0.25  # percentage of pixels > 1 required to assign a foreground label to a patch
 
@@ -55,41 +54,6 @@ def error_rate(predictions, labels):
         predictions.shape[0])
 
 
-# Write predictions from neural network to a file
-def write_predictions_to_file(predictions, labels, filename):
-    max_labels = numpy.argmax(labels, 1)
-    max_predictions = numpy.argmax(predictions, 1)
-    file = open(filename, "w")
-    n = predictions.shape[0]
-    for i in range(0, n):
-        file.write('{} {}'.format(max_labels[i], max_predictions[i]))
-    file.close()
-
-
-# Convert array of labels to an image
-def label_to_img(img_width, img_height, w, h, labels):
-    array_labels = numpy.zeros([img_width, img_height])
-    idx = 0
-    for i in range(0, img_height, h):
-        for j in range(0, img_width, w):
-            array_labels[j:j + w, i:i + h] = 1 if labels[idx][0] > 0.5 else 0
-            idx = idx + 1
-    return array_labels
-
-
-def make_img_overlay(img, predicted_img):
-    w = img.shape[0]
-    h = img.shape[1]
-    color_mask = numpy.zeros((w, h, 3), dtype=numpy.uint8)
-    color_mask[:, :, 0] = predicted_img * PIXEL_DEPTH
-
-    img8 = img_float_to_uint8(img)
-    background = Image.fromarray(img8, 'RGB').convert("RGBA")
-    overlay = Image.fromarray(color_mask, 'RGB').convert("RGBA")
-    new_img = Image.blend(background, overlay, 0.2)
-    return new_img
-
-
 def main(argv):
     data_dir = FLAGS.train_data_dir
     train_data_dir = os.path.join(data_dir, 'images/')
@@ -97,7 +61,7 @@ def main(argv):
 
     # Extract it into numpy arrays.
     train_images = load_images(train_data_dir)
-    train_data = extract_patches(IMG_PATCH_SIZE, *train_images) - 0.5
+    train_data = extract_patches(IMG_PATCH_SIZE, *train_images)
 
     train_groundtruth = load_images(train_labels_dir)
     train_groundtruth_patches = extract_patches(IMG_PATCH_SIZE, *train_groundtruth)
@@ -176,35 +140,59 @@ def main(argv):
         v = tf.reshape(v, (-1, img_w, img_h, 1))
         return v
 
-    # Get prediction for given input image 
-    def get_prediction(img):
-        data = numpy.asarray(img_crop(img, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
-        data_node = tf.constant(data)
+    def predict(images):
+        """Predict a batch of images
+
+        Shape:
+            images: [N, height, width, channel]
+        Return:
+            mask of road prediction [N, height, width, 1]
+        """
+        n = images.shape[0]
+        patches = extract_patches(IMG_PATCH_SIZE, *images)
+        n_patch_axis = int(images.shape[1] / IMG_PATCH_SIZE)
+        data_node = tf.constant(patches)
         output = tf.nn.softmax(model(data_node))
         output_prediction = s.run(output)
-        img_prediction = label_to_img(img.shape[0], img.shape[1], IMG_PATCH_SIZE, IMG_PATCH_SIZE, output_prediction)
+        patches_road = (output_prediction[:, 0] >= 0.5) * 1
 
-        return img_prediction
+        # expand the patches to get a mask image
+        masks = numpy.repeat(
+            numpy.repeat(
+                patches_road.reshape(n, n_patch_axis, n_patch_axis),
+                IMG_PATCH_SIZE, axis=1),
+            IMG_PATCH_SIZE, axis=2)
 
-    # Get prediction overlaid on the original image for given input file
-    def get_prediction_with_overlay(filename, image_idx=None):
+        return masks
 
-        if image_idx:
-            image_basename = "satImage_%.3d" % image_idx
-            image_filename = filename + image_basename + ".png"
-            img = mpimg.imread(image_filename)
-        else:
-            img = mpimg.imread(filename)
+    def predict_all(input_directory, output_directory):
+        """Predict the mask of every images in input_directory
+        Output an overlay for each image and a submission.csv file"""
+        print("Predictions of {} images".format(input_directory))
+        if not os.path.isdir(output_directory):
+            os.mkdir(output_directory)
 
-        img_prediction = get_prediction(img - 0.5)  # TODO
-        oimg = make_img_overlay(img, img_prediction)
+        images = load_images(input_directory)
+        masks = predict(images)
 
-        return oimg
+        print("Save predictions in {}".format(output_directory))
+        for idx, (image, mask) in enumerate(zip(images, masks)):
+            filename = os.path.join(output_directory, 'overlay_{:03}.png'.format(idx))
+            overlay_img = overlay(image, mask)
+            overlay_img.save(filename)
+
+        csv_file_name = os.path.join(output_directory, "submission.csv")
+        print("Writing predictions in CSV file {}".format(csv_file_name))
+        masks_to_submission(csv_file_name, *masks)
 
     # We will replicate the model structure for the training subgraph, as well
     # as the evaluation subgraphs, while sharing the trainable parameters.
     def model(data, train=False):
         """The Model definition."""
+
+        # recenter in [-.5, .5]
+        data = data - 0.5
+
         # 2D convolution, with 'SAME' padding (i.e. the output feature map has
         # the same size as the input). Note that {strides} is a 4D array whose
         # shape matches the data layout: [image index, y, x, depth].
@@ -383,23 +371,10 @@ def main(argv):
                 save_path = saver.save(s, FLAGS.train_dir + "/model.ckpt")
                 print("Model saved in file: %s" % save_path)
 
-        print("Running prediction on training set")
-        prediction_training_dir = "predictions_training/"
-        if not os.path.isdir(prediction_training_dir):
-            os.mkdir(prediction_training_dir)
-        for i, file_path in enumerate(glob.glob(os.path.join(FLAGS.train_data_dir, 'images/', "*.png"))):
-            oimg = get_prediction_with_overlay(file_path)
-            oimg.save(prediction_training_dir + "overlay_" + str(i) + ".png")
+        predict_all(os.path.join(FLAGS.train_data_dir, 'images'), "predictions_training/")
 
         if FLAGS.eval_data_dir:
-            print("Running prediction on evaluation set")
-            prediction_eval_dir = "predictions_eval/"
-            pattern = FLAGS.eval_data_dir + "/*.png"
-            if not os.path.isdir(prediction_eval_dir):
-                os.mkdir(prediction_eval_dir)
-            for i, file in enumerate(glob.glob(pattern)):
-                oimg = get_prediction_with_overlay(file)
-                oimg.save(prediction_eval_dir + "overlay_" + str(i) + ".png")
+            predict_all(FLAGS.eval_data_dir, "predictions_eval/")
 
 
 if __name__ == '__main__':

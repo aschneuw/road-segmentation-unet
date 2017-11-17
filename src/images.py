@@ -1,10 +1,11 @@
 import glob
 import os
 
-import numpy as np
 import matplotlib.image as mpimg
+import numpy as np
+from PIL import Image
 
-PIXEL_DEPTH = 255  # TODO move
+from constants import PIXEL_DEPTH
 
 
 def img_crop(im, w, h):
@@ -45,3 +46,16 @@ def load_images(directory):
 def extract_patches(patch_size, *images):
     img_patches = [img_crop(image, patch_size, patch_size) for image in images]
     return np.asarray([patch for patches in img_patches for patch in patches])
+
+
+def overlay(image, mask):
+    w = image.shape[0]
+    h = image.shape[1]
+    color_mask = np.zeros((w, h, 3), dtype=np.uint8)
+    color_mask[:, :, 0] = mask * PIXEL_DEPTH
+
+    image = img_float_to_uint8(image)
+    background = Image.fromarray(image, 'RGB').convert("RGBA")
+    overlay_img = Image.fromarray(color_mask, 'RGB').convert("RGBA")
+    new_img = Image.blend(background, overlay_img, 0.2)
+    return new_img
