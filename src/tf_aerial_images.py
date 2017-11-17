@@ -19,10 +19,13 @@ BATCH_SIZE = 16  # 64
 NUM_EPOCHS = 5
 RESTORE_MODEL = False  # If True, restore existing model instead of training a new one
 RECORDING_STEP = 1000
+FOREGROUND_THRESHOLD = 0.25  # percentage of pixels > 1 required to assign a foreground label to a patch
 
-# Set image patch size in pixels
-# IMG_PATCH_SIZE should be a multiple of 4
-# image size should be an integer multiple of this number!
+"""
+Set image patch size in pixels
+IMG_PATCH_SIZE should be a multiple of 4
+Image size should be an integer multiple of this number!
+"""
 IMG_PATCH_SIZE = 16
 
 tf.app.flags.DEFINE_string('train_dir', '/tmp/mnist',
@@ -93,6 +96,12 @@ def extract_labels(filename, num_images):
     return labels.astype(numpy.float32)
 
 
+def labels_for_patches(patches):
+    foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
+    labels = numpy.vstack([~foreground, foreground]).T * 1
+    return labels
+
+
 def error_rate(predictions, labels):
     """Return the error rate based on dense predictions and 1-hot labels."""
     return 100.0 - (
@@ -147,35 +156,20 @@ def main(argv):
 
     num_epochs = NUM_EPOCHS
 
-    c0 = 0
-    c1 = 0
-    for i in range(len(train_labels)):
-        if train_labels[i][0] == 1:
-            c0 = c0 + 1
-        else:
-            c1 = c1 + 1
-    print('Number of data points per class: c0 = ' + str(c0) + ' c1 = ' + str(c1))
+    idx0 = (train_labels[:, 0] == 1).nonzero()[0]
+    idx1 = (train_labels[:, 1] == 1).nonzero()[0]
+    print('Number of data points per class: c0={} c1={}'.format(idx0.shape[0], idx1.shape[0]))
 
     print('Balancing training data...')
-    min_c = min(c0, c1)
-    idx0 = [i for i, j in enumerate(train_labels) if j[0] == 1]
-    idx1 = [i for i, j in enumerate(train_labels) if j[1] == 1]
-    new_indices = idx0[0:min_c] + idx1[0:min_c]
-    print(len(new_indices))
-    print(train_data.shape)
+    min_c = min(idx0.shape[0], idx1.shape[0])
+    new_indices = numpy.concatenate([idx0[0:min_c], idx1[0:min_c]])
+    new_indices.sort(kind='mergesort')
     train_data = train_data[new_indices, :, :, :]
     train_labels = train_labels[new_indices]
+    print("train data shape: {}".format(train_data.shape))
+    print('Number of data points per class: c0={} c1={}'.format(min_c, min_c))
 
     train_size = train_labels.shape[0]
-
-    c0 = 0
-    c1 = 0
-    for i in range(len(train_labels)):
-        if train_labels[i][0] == 1:
-            c0 = c0 + 1
-        else:
-            c1 = c1 + 1
-    print('Number of data points per class: c0 = ' + str(c0) + ' c1 = ' + str(c1))
 
     # This is where training samples and labels are fed to the graph.
     # These placeholder nodes will be fed a batch of training data at each
