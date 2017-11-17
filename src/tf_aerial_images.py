@@ -446,8 +446,8 @@ def main(argv):
         prediction_training_dir = "predictions_training/"
         if not os.path.isdir(prediction_training_dir):
             os.mkdir(prediction_training_dir)
-        for i in range(1, TRAINING_SIZE + 1):
-            oimg = get_prediction_with_overlay(train_data_filename, i)
+        for i, file_path in enumerate(glob.glob(os.path.join(FLAGS.train_data_dir, 'images/', "*.png"))):
+            oimg = get_prediction_with_overlay(file_path)
             oimg.save(prediction_training_dir + "overlay_" + str(i) + ".png")
 
         if FLAGS.eval_data_dir:
