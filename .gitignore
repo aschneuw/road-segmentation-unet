@@ -1,3 +1,7 @@
+predictions_eval/
+predictions_training/
+data-sample/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
