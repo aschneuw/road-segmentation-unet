@@ -1,48 +1,27 @@
-import glob
 import os
 import sys
 
-import numpy
+import numpy as np
 import tensorflow as tf
-from PIL import Image
 
+from constants import PIXEL_DEPTH, NUM_CHANNELS, NUM_LABELS, FOREGROUND_THRESHOLD, IMG_PATCH_SIZE
 from images import load_images, extract_patches, overlay
 from mask_to_submission import masks_to_submission
 
-NUM_CHANNELS = 3  # RGB images
-PIXEL_DEPTH = 255
-NUM_LABELS = 2
-VALIDATION_SIZE = 5  # Size of the validation set.
-SEED = 66478  # Set to None for random seed.
-BATCH_SIZE = 16  # 64
-NUM_EPOCHS = 10
-RESTORE_MODEL = True  # If True, restore existing model instead of training a new one
-RECORDING_STEP = 1000
-FOREGROUND_THRESHOLD = 0.25  # percentage of pixels > 1 required to assign a foreground label to a patch
-
-"""
-Set image patch size in pixels
-IMG_PATCH_SIZE should be a multiple of 4
-Image size should be an integer multiple of this number!
-"""
-IMG_PATCH_SIZE = 16
-
-tf.app.flags.DEFINE_string('train_dir', '/tmp/mnist',
-                           """Directory where to write event logs """
-                           """and checkpoint.""")
-
-tf.app.flags.DEFINE_string('train_data_dir', './data/training',
-                           """Directory containing training images/ groundtruth/""")
-
-tf.app.flags.DEFINE_string('eval_data_dir', None,
-                           """Directory containing eval images""")
+tf.app.flags.DEFINE_string('train_dir', '/tmp/train_satellite', "Directory where to write event logs and checkpoint")
+tf.app.flags.DEFINE_string('train_data_dir', './data/training', "Directory containing training images/ groundtruth/")
+tf.app.flags.DEFINE_string('eval_data_dir', None, "Directory containing eval images")
+tf.app.flags.DEFINE_boolean('restore_model', False, "Restore the model from previous checkpoint")
+tf.app.flags.DEFINE_integer('num_epoch', 10, "Number of pass on the dataset during training")
+tf.app.flags.DEFINE_integer('batch_size', 16, "Batch size of training instances")
+tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
 
 FLAGS = tf.app.flags.FLAGS
 
 
 def labels_for_patches(patches):
     foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
-    labels = numpy.vstack([~foreground, foreground]).T * 1
+    labels = np.vstack([~foreground, foreground]).T * 1
     return labels
 
 
@@ -50,7 +29,7 @@ def error_rate(predictions, labels):
     """Return the error rate based on dense predictions and 1-hot labels."""
     return 100.0 - (
         100.0 *
-        numpy.sum(numpy.argmax(predictions, 1) == numpy.argmax(labels, 1)) /
+        np.sum(np.argmax(predictions, 1) == np.argmax(labels, 1)) /
         predictions.shape[0])
 
 
@@ -59,7 +38,7 @@ def main(argv):
     train_data_dir = os.path.join(data_dir, 'images/')
     train_labels_dir = os.path.join(data_dir, 'groundtruth/')
 
-    # Extract it into numpy arrays.
+    # Extract it into np arrays.
     train_images = load_images(train_data_dir)
     train_data = extract_patches(IMG_PATCH_SIZE, *train_images)
 
@@ -73,7 +52,7 @@ def main(argv):
 
     print('Balancing training data...')
     min_c = min(idx0.shape[0], idx1.shape[0])
-    new_indices = numpy.concatenate([idx0[0:min_c], idx1[0:min_c]])
+    new_indices = np.concatenate([idx0[0:min_c], idx1[0:min_c]])
     new_indices.sort(kind='mergesort')
     train_data = train_data[new_indices, :, :, :]
     train_labels = train_labels[new_indices]
@@ -87,9 +66,9 @@ def main(argv):
     # training step using the {feed_dict} argument to the Run() call below.
     train_data_node = tf.placeholder(
         tf.float32,
-        shape=(BATCH_SIZE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS))
+        shape=(FLAGS.batch_size, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS))
     train_labels_node = tf.placeholder(tf.float32,
-                                       shape=(BATCH_SIZE, NUM_LABELS))
+                                       shape=(FLAGS.batch_size, NUM_LABELS))
     train_all_data_node = tf.constant(train_data)
 
     # The variables below hold all the trainable weights. They are passed an
@@ -98,22 +77,22 @@ def main(argv):
     conv1_weights = tf.Variable(
         tf.truncated_normal([5, 5, NUM_CHANNELS, 32],  # 5x5 filter, depth 32.
                             stddev=0.1,
-                            seed=SEED))
+                            seed=FLAGS.seed))
     conv1_biases = tf.Variable(tf.zeros([32]))
     conv2_weights = tf.Variable(
         tf.truncated_normal([5, 5, 32, 64],
                             stddev=0.1,
-                            seed=SEED))
+                            seed=FLAGS.seed))
     conv2_biases = tf.Variable(tf.constant(0.1, shape=[64]))
     fc1_weights = tf.Variable(  # fully connected, depth 512.
         tf.truncated_normal([int(IMG_PATCH_SIZE / 4 * IMG_PATCH_SIZE / 4 * 64), 512],
                             stddev=0.1,
-                            seed=SEED))
+                            seed=FLAGS.seed))
     fc1_biases = tf.Variable(tf.constant(0.1, shape=[512]))
     fc2_weights = tf.Variable(
         tf.truncated_normal([512, NUM_LABELS],
                             stddev=0.1,
-                            seed=SEED))
+                            seed=FLAGS.seed))
     fc2_biases = tf.Variable(tf.constant(0.1, shape=[NUM_LABELS]))
 
     # Make an image summary for 4d tensor image with index idx
@@ -157,8 +136,8 @@ def main(argv):
         patches_road = (output_prediction[:, 0] >= 0.5) * 1
 
         # expand the patches to get a mask image
-        masks = numpy.repeat(
-            numpy.repeat(
+        masks = np.repeat(
+            np.repeat(
                 patches_road.reshape(n, n_patch_axis, n_patch_axis),
                 IMG_PATCH_SIZE, axis=1),
             IMG_PATCH_SIZE, axis=2)
@@ -193,17 +172,13 @@ def main(argv):
         # recenter in [-.5, .5]
         data = data - 0.5
 
-        # 2D convolution, with 'SAME' padding (i.e. the output feature map has
-        # the same size as the input). Note that {strides} is a 4D array whose
-        # shape matches the data layout: [image index, y, x, depth].
         conv = tf.nn.conv2d(data,
                             conv1_weights,
                             strides=[1, 1, 1, 1],
                             padding='SAME')
-        # Bias and rectified linear non-linearity.
+
         relu = tf.nn.relu(tf.nn.bias_add(conv, conv1_biases))
-        # Max pooling. The kernel size spec {ksize} also follows the layout of
-        # the data. Here we have a pooling window of 2, and a stride of 2.
+
         pool = tf.nn.max_pool(relu,
                               ksize=[1, 2, 2, 1],
                               strides=[1, 2, 2, 1],
@@ -213,32 +188,22 @@ def main(argv):
                              conv2_weights,
                              strides=[1, 1, 1, 1],
                              padding='SAME')
+
         relu2 = tf.nn.relu(tf.nn.bias_add(conv2, conv2_biases))
+
         pool2 = tf.nn.max_pool(relu2,
                                ksize=[1, 2, 2, 1],
                                strides=[1, 2, 2, 1],
                                padding='SAME')
 
-        # Uncomment these lines to check the size of each layer
-        # print 'data ' + str(data.get_shape())
-        # print 'conv ' + str(conv.get_shape())
-        # print 'relu ' + str(relu.get_shape())
-        # print 'pool ' + str(pool.get_shape())
-        # print 'pool2 ' + str(pool2.get_shape())
-
-        # Reshape the feature map cuboid into a 2D matrix to feed it to the
-        # fully connected layers.
         pool_shape = pool2.get_shape().as_list()
         reshape = tf.reshape(
             pool2,
             [pool_shape[0], pool_shape[1] * pool_shape[2] * pool_shape[3]])
-        # Fully connected layer. Note that the '+' operation automatically
-        # broadcasts the biases.
+
         hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases)
-        # Add a 50% dropout during training only. Dropout also scales
-        # activations such that no rescaling is needed at evaluation time.
-        # if train:
-        #    hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
+
+        # hidden = tf.nn.dropout(hidden, 0.5, seed=FLAGS.seed)
         out = tf.matmul(hidden, fc2_weights) + fc2_biases
 
         if train:
@@ -257,7 +222,7 @@ def main(argv):
         return out
 
     # Training computation: logits + cross-entropy loss.
-    logits = model(train_data_node, True)  # BATCH_SIZE*NUM_LABELS
+    logits = model(train_data_node, True)  # FLAGS.batch_size*NUM_LABELS
     # print 'logits = ' + str(logits.get_shape()) + ' train_labels_node = ' + str(train_labels_node.get_shape())
     loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
         logits=logits, labels=train_labels_node))
@@ -286,7 +251,7 @@ def main(argv):
     # Decay once per epoch, using an exponential schedule starting at 0.01.
     learning_rate = tf.train.exponential_decay(
         0.01,  # Base learning rate.
-        BATCH_SIZE * batch,  # Current index into the dataset.
+        FLAGS.batch_size * batch,  # Current index into the dataset.
         train_size,  # Decay step.
         0.95,  # Decay rate.
         staircase=True)
@@ -308,7 +273,7 @@ def main(argv):
     # Create a local session to run this computation.
     with tf.Session() as s:
 
-        if RESTORE_MODEL:
+        if FLAGS.restore_model:
             # Restore variables from disk.
             saver.restore(s, FLAGS.train_dir + "/model.ckpt")
             print("Model restored.")
@@ -323,30 +288,30 @@ def main(argv):
                                                    graph=s.graph)
             print('Initialized!')
             # Loop through training steps.
-            print('Total number of iterations = ' + str(int(NUM_EPOCHS * train_size / BATCH_SIZE)))
+            print('Total number of iterations = ' + str(int(FLAGS.num_epoch * train_size / FLAGS.batch_size)))
 
             training_indices = range(train_size)
 
-            for iepoch in range(NUM_EPOCHS):
+            for iepoch in range(FLAGS.num_epoch):
 
                 # Permute training indices
-                perm_indices = numpy.random.permutation(training_indices)
+                perm_indices = np.random.permutation(training_indices)
 
-                for step in range(int(train_size / BATCH_SIZE)):
+                for step in range(int(train_size / FLAGS.batch_size)):
 
-                    offset = (step * BATCH_SIZE) % (train_size - BATCH_SIZE)
-                    batch_indices = perm_indices[offset:(offset + BATCH_SIZE)]
+                    offset = (step * FLAGS.batch_size) % (train_size - FLAGS.batch_size)
+                    batch_indices = perm_indices[offset:(offset + FLAGS.batch_size)]
 
                     # Compute the offset of the current minibatch in the data.
                     # Note that we could use better randomization across epochs.
                     batch_data = train_data[batch_indices, :, :, :]
                     batch_labels = train_labels[batch_indices]
-                    # This dictionary maps the batch data (as a numpy array) to the
+                    # This dictionary maps the batch data (as a np array) to the
                     # node in the graph is should be fed to.
                     feed_dict = {train_data_node: batch_data,
                                  train_labels_node: batch_labels}
 
-                    if step % RECORDING_STEP == 0:
+                    if step % 1000 == 0:
 
                         summary_str, _, l, lr, predictions = s.run(
                             [summary_op, optimizer, loss, learning_rate, train_prediction],
@@ -355,7 +320,7 @@ def main(argv):
                         summary_writer.add_summary(summary_str, step)
                         summary_writer.flush()
 
-                        print('Epoch %.2f' % (float(step) * BATCH_SIZE / train_size))
+                        print('Epoch %.2f' % (float(step) * FLAGS.batch_size / train_size))
                         print('Minibatch loss: %.3f, learning rate: %.6f' % (l, lr))
                         print('Minibatch error: %.1f%%' % error_rate(predictions,
                                                                      batch_labels))
