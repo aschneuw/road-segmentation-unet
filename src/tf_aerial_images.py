@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import tensorflow as tf
 from datetime import datetime
 
@@ -41,8 +42,12 @@ class ConvolutionalModel:
         self._options = options
         self._session = session
         self.patches, self.labels = self.prepare_data()
+        np.random.seed(options.seed)
+
         self.build_graph()
-        self.summary_path = os.path.join(options.save_path, datetime.now().isoformat('T', 'seconds'))
+        self.build_eval_graph()
+        summary_path = os.path.join(options.save_path, datetime.now().isoformat('T', 'seconds'))
+        self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
     def forward(self, patches):
         """Build the graph for the forward pass."""
@@ -118,6 +123,7 @@ class ConvolutionalModel:
         return out
 
     def cross_entropy_loss(self, labels, pred_logits):
+        # TODO add regularizer
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred_logits, labels=labels)
         loss = tf.reduce_mean(cross_entropy)
         return loss
@@ -155,13 +161,15 @@ class ConvolutionalModel:
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
                                       shape=(opts.batch_size, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS))
-        labels_node = tf.placeholder(tf.int32,
+        labels_node = tf.placeholder(tf.int64,
                                      shape=(opts.batch_size,))
 
         predict_logits = self.forward(patches_node)
         loss = self.cross_entropy_loss(labels_node, predict_logits)
         tf.summary.scalar("loss", loss)
         self.optimize(loss)
+
+        tf.summary.image('images', patches_node)
 
         self._loss = loss
         self._patches_node = patches_node
@@ -200,31 +208,32 @@ class ConvolutionalModel:
         """Train the model for one epoch."""
         opts = self._options
 
-        # TODO shuffle indices
+        indices = np.arange(0, opts.num_train_patches)
+        np.random.shuffle(indices)
+
         # TODO save
+        # TODO make prediction by image:
+        # - feed uint8 images instead
+        # - split patches only in model
+        # - display some image with prediction
 
         summary_op = tf.summary.merge_all()
-        summary_writer = tf.summary.FileWriter(self.summary_path, self._session.graph)
 
         for batch_i, offset in enumerate(range(0, opts.num_train_patches - opts.batch_size, opts.batch_size)):
+            batch_indices = indices[offset:offset + opts.batch_size]
             feed_dict = {
-                self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
-                self._labels_node: self.labels[offset:offset + opts.batch_size]
+                self._patches_node: self.patches[batch_indices, :, :, :],
+                self._labels_node: self.labels[batch_indices]
             }
 
             summary_str, _, l, lr, predictions, step = self._session.run(
                 [summary_op, self._train, self._loss, self._lr, self._predict_logits, self._global_step],
                 feed_dict=feed_dict)
 
-            summary_writer.add_summary(summary_str, global_step=step)
+            self.summary_writer.add_summary(summary_str, global_step=step)
 
-        summary_writer.flush()
+        self.summary_writer.flush()
 
-        self._session.run([])
-        pass
-
-    def predict(self):
-        raise NotImplementedError
 
 
 def main(_):

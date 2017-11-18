@@ -60,4 +60,4 @@ def overlay(image, mask):
 
 def labels_for_patches(patches):
     foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
-    return np.int32(foreground)
+    return np.int64(foreground)
