@@ -139,8 +139,8 @@ def main(argv):
         masks = np.repeat(
             np.repeat(
                 patches_road.reshape(n, n_patch_axis, n_patch_axis),
-                IMG_PATCH_SIZE, axis=1),
-            IMG_PATCH_SIZE, axis=2)
+                IMG_PATCH_SIZE, axis=2),
+            IMG_PATCH_SIZE, axis=1)
 
         return masks
 
