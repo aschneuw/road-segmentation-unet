@@ -5,7 +5,7 @@ import matplotlib.image as mpimg
 import numpy as np
 from PIL import Image
 
-from constants import PIXEL_DEPTH
+from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
 
 def img_crop(im, w, h):
@@ -30,16 +30,13 @@ def img_float_to_uint8(img):
     return rimg
 
 
-def load_images(directory):
+def load(directory):
     """Extract the images into a 4D tensor [image index, y, x, channels]."""
     images = []
     for i, file_path in enumerate(glob.glob(os.path.join(directory, '*.png'))):
-        if os.path.isfile(file_path):
-            print('Loading ' + file_path)
-            img = mpimg.imread(file_path)
-            images.append(img)
-        else:
-            print('File {} does not exist'.format(file_path))
+        img = mpimg.imread(file_path)
+        images.append(img)
+    print("Loaded {} images from {}".format(len(images), directory))
     return np.asarray(images)
 
 
@@ -59,3 +56,8 @@ def overlay(image, mask):
     overlay_img = Image.fromarray(color_mask, 'RGB').convert("RGBA")
     new_img = Image.blend(background, overlay_img, 0.2)
     return new_img
+
+
+def labels_for_patches(patches):
+    foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
+    return np.int32(foreground)
