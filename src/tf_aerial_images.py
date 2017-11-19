@@ -58,10 +58,10 @@ class ConvolutionalModel:
         np.random.seed(options.seed)
 
         self.summary_ops = []
+        self.build_graph()
+
         summary_path = os.path.join(options.save_path, datetime.now().isoformat('T', 'seconds'))
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
-
-        self.build_graph()
 
     def forward(self, patches):
         """Build the graph for the forward pass."""
