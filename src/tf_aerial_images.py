@@ -5,7 +5,7 @@ import tensorflow as tf
 from datetime import datetime
 
 import images
-from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE
+from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT
 
 tf.app.flags.DEFINE_string('save_path', './runs', "Directory where to write event logs and checkpoint")
 tf.app.flags.DEFINE_string('train_data_dir', './data/training', "Directory containing training images/ groundtruth/")
@@ -43,9 +43,9 @@ class ConvolutionalModel:
         self._session = session
         self.patches, self.labels = self.prepare_data()
         np.random.seed(options.seed)
+        self.summary_ops = []
 
         self.build_graph()
-        self.build_eval_graph()
         summary_path = os.path.join(options.save_path, datetime.now().isoformat('T', 'seconds'))
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
@@ -143,12 +143,16 @@ class ConvolutionalModel:
             name='learning_rate')
 
         self._lr = lr
-        tf.summary.scalar('learning_rate', lr)
+        self.summary_ops.append(tf.summary.scalar('learning_rate', lr))
 
         # Use simple momentum for the optimization.
         optimizer = tf.train.GradientDescentOptimizer(lr)
         train = optimizer.minimize(loss, global_step=self._global_step)
-        self._train = train
+        return train
+
+    def image_summary(self):
+        self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
+        self._image_summary = tf.summary.image('samples', self._images_to_display)
 
     def build_graph(self):
         """Build the graph for the full model."""
@@ -166,15 +170,16 @@ class ConvolutionalModel:
 
         predict_logits = self.forward(patches_node)
         loss = self.cross_entropy_loss(labels_node, predict_logits)
-        tf.summary.scalar("loss", loss)
-        self.optimize(loss)
+        self.summary_ops.append(tf.summary.scalar("loss", loss))
+        self._train = self.optimize(loss)
 
-        tf.summary.image('images', patches_node)
-
+        self._predictions = tf.argmax(predict_logits, dimension=1)
         self._loss = loss
         self._patches_node = patches_node
         self._labels_node = labels_node
         self._predict_logits = predict_logits
+
+        self.image_summary()
 
         # Properly initialize all variables.
         tf.global_variables_initializer().run()
@@ -217,7 +222,10 @@ class ConvolutionalModel:
         # - split patches only in model
         # - display some image with prediction
 
-        summary_op = tf.summary.merge_all()
+        summary_op = tf.summary.merge(self.summary_ops)
+
+        n_errors = 0
+        total = 0
 
         for batch_i, offset in enumerate(range(0, opts.num_train_patches - opts.batch_size, opts.batch_size)):
             batch_indices = indices[offset:offset + opts.batch_size]
@@ -226,14 +234,45 @@ class ConvolutionalModel:
                 self._labels_node: self.labels[batch_indices]
             }
 
-            summary_str, _, l, lr, predictions, step = self._session.run(
-                [summary_op, self._train, self._loss, self._lr, self._predict_logits, self._global_step],
+            summary_str, _, l, lr, predictions, predictions, step = self._session.run(
+                [summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions, self._global_step],
                 feed_dict=feed_dict)
+
+            n_errors += np.abs(self.labels[batch_indices] - predictions).sum()
+            total += opts.batch_size
+            print('Average error rate: {}'.format(n_errors / total), end='\r')
 
             self.summary_writer.add_summary(summary_str, global_step=step)
 
-        self.summary_writer.flush()
+        print()
 
+        N_EVAL_IMAGE = 1
+        n_patches_eval = int(N_EVAL_IMAGE * (IMAGE_WIDTH / IMG_PATCH_SIZE) * (IMAGE_HEIGHT / IMG_PATCH_SIZE))
+        n_batches_eval = int(n_patches_eval / opts.batch_size)
+        predictions = np.ndarray(n_patches_eval)
+
+        assert IMAGE_WIDTH % IMG_PATCH_SIZE == 0
+        assert n_patches_eval % opts.batch_size == 0, \
+            'batch_size {} should divide n_patches_eval {}'.format(opts.batch_size, n_patches_eval)
+
+        for batch in range(n_batches_eval):
+            offset = batch * opts.batch_size
+
+            feed_dict = {
+                self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
+            }
+            predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
+
+        first_image_patches = self.patches[:n_patches_eval]
+        first_image = images.image_from_patches(first_image_patches, IMAGE_WIDTH, IMAGE_HEIGHT)
+        mask = images.image_from_predictions(predictions, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT)
+        overlay = images.overlay(first_image, mask)
+        overlay = np.array(overlay)
+        overlay = overlay[np.newaxis, :, :, :]
+        image_sum, step = self._session.run([self._image_summary, self._global_step], feed_dict={self._images_to_display: overlay})
+        self.summary_writer.add_summary(image_sum, global_step=step)
+
+        self.summary_writer.flush()
 
 
 def main(_):

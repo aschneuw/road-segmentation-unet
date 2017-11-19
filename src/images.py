@@ -61,3 +61,32 @@ def overlay(image, mask):
 def labels_for_patches(patches):
     foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
     return np.int64(foreground)
+
+
+def image_from_patches(patches, im_width, im_height):
+    """patches: [N, patch_height, patch_width, channels?]"""
+    im_shape = list(patches.shape[1:])
+    im_shape[0] = im_height
+    im_shape[1] = im_width
+
+    patch_size = patches.shape[1]
+
+    im = np.ndarray(shape=im_shape, dtype=patches.dtype)
+    i = 0
+    for x in range(0, im_width, patch_size):
+        for y in range(0, im_height, patch_size):
+            im[y:y+patch_size,x:x+patch_size] = patches[i]
+            i += 1
+
+    return im
+
+
+def image_from_predictions(predictions, patch_size, im_width, im_height):
+    im = np.ndarray(shape=(im_height, im_width))
+    i = 0
+    for x in range(0, im_width, patch_size):
+        for y in range(0, im_height, patch_size):
+            im[y:y+patch_size,x:x+patch_size] = predictions[i]
+            i += 1
+
+    return im
