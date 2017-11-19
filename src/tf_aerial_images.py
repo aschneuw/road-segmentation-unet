@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT
+from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT, PATCHES_PER_IMAGE
 
 tf.app.flags.DEFINE_string('save_path', './runs', "Directory where to write event logs and checkpoint")
 tf.app.flags.DEFINE_string('train_data_dir', './data/training', "Directory containing training images/ groundtruth/")
@@ -17,7 +17,8 @@ tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
 tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
 tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
 tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
-tf.app.flags.DEFINE_integer('eval_every', 1000, "Number of steps between evaluations")
+tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
+tf.app.flags.DEFINE_integer('num_eval_images', 10, "Number of images to predict for an evaluation")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -37,13 +38,21 @@ class Options(object):
         self.momentum = FLAGS.momentum
         self.eval_every = FLAGS.eval_every
         self.lambda_reg = FLAGS.lambda_reg
+        self.num_eval_images = FLAGS.num_eval_images
+        self.num_train_patches = None
+
+        self.num_patches_eval = self.num_eval_images * PATCHES_PER_IMAGE
+
+        assert self.num_patches_eval % self.batch_size == 0, \
+            'batch_size {} should divide num_patches_eval {}'.format(self.batch_size, self.num_patches_eval)
+        self.num_batches_eval = int(self.num_patches_eval / self.batch_size)
 
 
 class ConvolutionalModel:
     """Two layers patch convolution model (baseline)"""
 
     def __init__(self, options, session):
-        self._options = options
+        self._options: Options = options
         self._session = session
         self.patches, self.labels = self.prepare_data()
         np.random.seed(options.seed)
@@ -134,8 +143,6 @@ class ConvolutionalModel:
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred_logits, labels=labels)
         loss = tf.reduce_mean(cross_entropy)
 
-        self._num_errors = tf.abs() np.abs(self.labels[batch_indices] - predictions).sum()
-
         # Add the regularization term to the loss.
         regularizers = tf.add_n([tf.nn.l2_loss(w) for w in self._regularized_weights])
         loss += opts.lambda_reg * regularizers
@@ -164,8 +171,9 @@ class ConvolutionalModel:
         return train
 
     def image_summary(self):
+        opts = self._options
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
-        self._image_summary = tf.summary.image('samples', self._images_to_display)
+        self._image_summary = tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)
 
     def build_graph(self):
         """Build the graph for the full model."""
@@ -193,6 +201,10 @@ class ConvolutionalModel:
         self._predict_logits = predict_logits
 
         self.image_summary()
+        self.summary_op = tf.summary.merge(self.summary_ops)
+
+        self._missclassification_rate = tf.placeholder(tf.float64, name='misclassification_rate')
+        self.misclassification_summary = tf.summary.scalar('misclassification_rate', self._missclassification_rate)
 
         # Properly initialize all variables.
         tf.global_variables_initializer().run()
@@ -229,15 +241,7 @@ class ConvolutionalModel:
         indices = np.arange(0, opts.num_train_patches)
         np.random.shuffle(indices)
 
-        # TODO save
-        # TODO make prediction by image:
-        # - feed uint8 images instead
-        # - split patches only in model
-        # - display some image with prediction
-
-        summary_op = tf.summary.merge(self.summary_ops)
-
-        n_errors = 0
+        num_errors = 0
         total = 0
 
         for batch_i, offset in enumerate(range(0, opts.num_train_patches - opts.batch_size, opts.batch_size)):
@@ -248,45 +252,47 @@ class ConvolutionalModel:
             }
 
             summary_str, _, l, lr, predictions, predictions, step = self._session.run(
-                [summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions,
+                [self.summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions,
                  self._global_step],
                 feed_dict=feed_dict)
 
-            n_errors += np.abs(self.labels[batch_indices] - predictions).sum()
-            total += opts.batch_size
-            print('Average error rate: {:.4f}'.format(n_errors / total), end='\r')
-
             self.summary_writer.add_summary(summary_str, global_step=step)
 
-        print()
+            num_errors += np.abs(self.labels[batch_indices] - predictions).sum()
+            total += opts.batch_size
 
-        N_EVAL_IMAGE = 1
-        n_patches_eval = int(N_EVAL_IMAGE * (IMAGE_WIDTH / IMG_PATCH_SIZE) * (IMAGE_HEIGHT / IMG_PATCH_SIZE))
-        n_batches_eval = int(n_patches_eval / opts.batch_size)
-        predictions = np.ndarray(shape=(n_patches_eval,))
+            # from time to time do full prediction on some images
+            if step > 0 and step % opts.eval_every == 0:
+                eval_predictions = np.ndarray(shape=(opts.num_patches_eval,))
 
-        assert IMAGE_WIDTH % IMG_PATCH_SIZE == 0
-        assert n_patches_eval % opts.batch_size == 0, \
-            'batch_size {} should divide n_patches_eval {}'.format(opts.batch_size, n_patches_eval)
+                for batch in range(opts.num_batches_eval):
+                    offset = batch * opts.batch_size
 
-        for batch in range(n_batches_eval):
-            offset = batch * opts.batch_size
+                    feed_dict = {
+                        self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
+                    }
+                    eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
 
-            feed_dict = {
-                self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
-            }
-            predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
+                # reconstruct original images and masks
+                original_images_patches = self.patches[:opts.num_patches_eval]
+                display_images = np.ndarray(shape=(opts.num_eval_images, IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CHANNELS + 1))
 
-        first_image_patches = self.patches[:n_patches_eval]
-        first_image = images.image_from_patches(first_image_patches, IMAGE_WIDTH, IMAGE_HEIGHT)
-        mask = images.image_from_predictions(predictions, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT)
-        overlay = images.overlay(first_image, mask)
-        overlay = np.array(overlay)
-        overlay = overlay[np.newaxis, :, :, :]
-        image_sum, step = self._session.run([self._image_summary, self._global_step],
-                                            feed_dict={self._images_to_display: overlay})
-        self.summary_writer.add_summary(image_sum, global_step=step)
+                for i, offset in enumerate(range(0, opts.num_eval_images * PATCHES_PER_IMAGE, PATCHES_PER_IMAGE)):
+                    original_image = images.image_from_patches(
+                        original_images_patches[offset:offset + PATCHES_PER_IMAGE], IMAGE_WIDTH, IMAGE_HEIGHT)
+                    mask = images.image_from_predictions(
+                        eval_predictions[offset:offset + PATCHES_PER_IMAGE], IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT)
+                    overlay = np.array(images.overlay(original_image, mask))
+                    display_images[i, :, :, :] = overlay
 
+                image_sum, step = self._session.run([self._image_summary, self._global_step],
+                                                    feed_dict={self._images_to_display: display_images})
+                self.summary_writer.add_summary(image_sum, global_step=step)
+
+        # save the missclassification rate over the epoch
+        misclassification, step = self._session.run([self.misclassification_summary, self._global_step],
+                                                    feed_dict={self._missclassification_rate: num_errors / total})
+        self.summary_writer.add_summary(misclassification, global_step=step)
         self.summary_writer.flush()
 
 
