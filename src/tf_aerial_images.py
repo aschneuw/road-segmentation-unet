@@ -1,8 +1,8 @@
 import os
+from datetime import datetime
 
 import numpy as np
 import tensorflow as tf
-from datetime import datetime
 
 import images
 from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT
@@ -15,7 +15,9 @@ tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset durin
 tf.app.flags.DEFINE_integer('batch_size', 64, "Batch size of training instances")
 tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
 tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
+tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
 tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
+tf.app.flags.DEFINE_integer('eval_every', 1000, "Number of steps between evaluations")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -33,6 +35,8 @@ class Options(object):
         self.seed = FLAGS.seed
         self.lr = FLAGS.lr
         self.momentum = FLAGS.momentum
+        self.eval_every = FLAGS.eval_every
+        self.lambda_reg = FLAGS.lambda_reg
 
 
 class ConvolutionalModel:
@@ -43,11 +47,12 @@ class ConvolutionalModel:
         self._session = session
         self.patches, self.labels = self.prepare_data()
         np.random.seed(options.seed)
-        self.summary_ops = []
 
-        self.build_graph()
+        self.summary_ops = []
         summary_path = os.path.join(options.save_path, datetime.now().isoformat('T', 'seconds'))
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
+
+        self.build_graph()
 
     def forward(self, patches):
         """Build the graph for the forward pass."""
@@ -118,14 +123,22 @@ class ConvolutionalModel:
                                     seed=opts.seed), name='weight')
             fc2_biases = tf.Variable(tf.constant(0.1, shape=[NUM_LABELS]), name='bias')
             out = tf.matmul(hidden, fc2_weights) + fc2_biases
-            # out = tf.sigmoid(out, name='sigmoid')  TODO check
+
+        self._regularized_weights = [fc1_weights, fc1_biases, fc2_weights, fc2_biases]
 
         return out
 
     def cross_entropy_loss(self, labels, pred_logits):
-        # TODO add regularizer
+        opts = self._options
+
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred_logits, labels=labels)
         loss = tf.reduce_mean(cross_entropy)
+
+        self._num_errors = tf.abs() np.abs(self.labels[batch_indices] - predictions).sum()
+
+        # Add the regularization term to the loss.
+        regularizers = tf.add_n([tf.nn.l2_loss(w) for w in self._regularized_weights])
+        loss += opts.lambda_reg * regularizers
         return loss
 
     def optimize(self, loss):
@@ -173,7 +186,7 @@ class ConvolutionalModel:
         self.summary_ops.append(tf.summary.scalar("loss", loss))
         self._train = self.optimize(loss)
 
-        self._predictions = tf.argmax(predict_logits, dimension=1)
+        self._predictions = tf.argmax(predict_logits, axis=1)
         self._loss = loss
         self._patches_node = patches_node
         self._labels_node = labels_node
@@ -235,12 +248,13 @@ class ConvolutionalModel:
             }
 
             summary_str, _, l, lr, predictions, predictions, step = self._session.run(
-                [summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions, self._global_step],
+                [summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions,
+                 self._global_step],
                 feed_dict=feed_dict)
 
             n_errors += np.abs(self.labels[batch_indices] - predictions).sum()
             total += opts.batch_size
-            print('Average error rate: {}'.format(n_errors / total), end='\r')
+            print('Average error rate: {:.4f}'.format(n_errors / total), end='\r')
 
             self.summary_writer.add_summary(summary_str, global_step=step)
 
@@ -249,7 +263,7 @@ class ConvolutionalModel:
         N_EVAL_IMAGE = 1
         n_patches_eval = int(N_EVAL_IMAGE * (IMAGE_WIDTH / IMG_PATCH_SIZE) * (IMAGE_HEIGHT / IMG_PATCH_SIZE))
         n_batches_eval = int(n_patches_eval / opts.batch_size)
-        predictions = np.ndarray(n_patches_eval)
+        predictions = np.ndarray(shape=(n_patches_eval,))
 
         assert IMAGE_WIDTH % IMG_PATCH_SIZE == 0
         assert n_patches_eval % opts.batch_size == 0, \
@@ -269,7 +283,8 @@ class ConvolutionalModel:
         overlay = images.overlay(first_image, mask)
         overlay = np.array(overlay)
         overlay = overlay[np.newaxis, :, :, :]
-        image_sum, step = self._session.run([self._image_summary, self._global_step], feed_dict={self._images_to_display: overlay})
+        image_sum, step = self._session.run([self._image_summary, self._global_step],
+                                            feed_dict={self._images_to_display: overlay})
         self.summary_writer.add_summary(image_sum, global_step=step)
 
         self.summary_writer.flush()
