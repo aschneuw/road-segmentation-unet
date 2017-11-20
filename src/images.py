@@ -3,35 +3,17 @@ import os
 
 import matplotlib.image as mpimg
 import numpy as np
-from PIL import Image
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
 
-def img_crop(im, w, h):
-    """Extract patches from a given image"""
-    list_patches = []
-    img_width = im.shape[0]
-    img_height = im.shape[1]
-    is_2d = len(im.shape) < 3
-    for i in range(0, img_height, h):
-        for j in range(0, img_width, w):
-            if is_2d:
-                im_patch = im[j:j + w, i:i + h]
-            else:
-                im_patch = im[j:j + w, i:i + h, :]
-            list_patches.append(im_patch)
-    return list_patches
-
-
 def img_float_to_uint8(img):
-    rimg = img - np.min(img)
-    rimg = (rimg / np.max(rimg) * PIXEL_DEPTH).round().astype(np.uint8)
-    return rimg
+    """Transform an array of float images into uint8 images"""
+    return (img * PIXEL_DEPTH).round().astype(np.uint8)
 
 
 def load(directory):
-    """Extract the images into a 4D tensor [image index, y, x, channels]."""
+    """Extract the images in `directory` into a tensor [num_images, height, width(, channels)]"""
     images = []
     for i, file_path in enumerate(glob.glob(os.path.join(directory, '*.png'))):
         img = mpimg.imread(file_path)
@@ -40,53 +22,118 @@ def load(directory):
     return np.asarray(images)
 
 
-def extract_patches(patch_size, *images):
-    img_patches = [img_crop(image, patch_size, patch_size) for image in images]
-    return np.asarray([patch for patches in img_patches for patch in patches])
+def extract_patches(images, patch_size):
+    """extract square patches from a batch of images
 
+    images:
+        4D [num_images, image_height, image_width, num_channel]
+        or 3D [num_images, image_height, image_width]
+    patch_size:
+        should divide the image width and height
 
-def overlay(image, mask):
-    w = image.shape[0]
-    h = image.shape[1]
-    color_mask = np.zeros((w, h, 3), dtype=np.uint8)
-    color_mask[:, :, 0] = mask * PIXEL_DEPTH
+    returns:
+        4D input: [num_patches, patch_size, patch_size, num_channel]
+        3D input: [num_patches, patch_size, patch_size]
+    """
+    has_channels = (len(images.shape) == 4)
+    if not has_channels:
+        images = np.expand_dims(images, -1)
 
-    image = img_float_to_uint8(image)
-    background = Image.fromarray(image, 'RGB').convert("RGBA")
-    overlay_img = Image.fromarray(color_mask, 'RGB').convert("RGBA")
-    new_img = Image.blend(background, overlay_img, 0.2)
-    return new_img
+    num_images, image_height, image_width, num_channel = images.shape
+    assert image_height % patch_size == 0 and image_width % patch_size == 0
+    num_patches = num_images * int(image_height / patch_size) * int(image_width / patch_size)
+
+    patches = np.zeros((num_patches, patch_size, patch_size, num_channel))
+
+    patch_idx = 0
+    for n in range(0, num_images):
+        for x in range(0, image_width, patch_size):
+            for y in range(0, image_height, patch_size):
+                patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size, :]
+                patch_idx += 1
+
+    if not has_channels:
+        patches = np.squeeze(patches, -1)
+
+    return patches
 
 
 def labels_for_patches(patches):
+    """Compute the label for a some patches
+    Change FOREGROUND_THRESHOLD to modify the ratio for positive/negative
+
+    patches:
+        shape: [num_batches, patch_size, patch_size]
+    returns:
+        the label 1 = road, 0 = other
+        [num_batches, ]
+    """
     foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
     return np.int64(foreground)
 
 
-def image_from_patches(patches, im_width, im_height):
-    """patches: [N, patch_height, patch_width, channels?]"""
-    im_shape = list(patches.shape[1:])
-    im_shape[0] = im_height
-    im_shape[1] = im_width
+def overlays(images, masks, fade=0.2):
+    """Add the masks on top of the images with red transparency
 
-    patch_size = patches.shape[1]
+    images:
+        array of images
+        shape: [num_images, im_height, im_width, num_channel]
 
-    im = np.ndarray(shape=im_shape, dtype=patches.dtype)
-    i = 0
-    for x in range(0, im_width, patch_size):
-        for y in range(0, im_height, patch_size):
-            im[y:y+patch_size,x:x+patch_size] = patches[i]
-            i += 1
+    masks:
+        array of masks
+        shape: [num_images, im_height, im_width, 1]
 
-    return im
+    returns:
+        [num_images, im_height, im_width, num_channel]
+    """
+    num_images, im_height, im_width, num_channel = images.shape
+    color_masks = np.zeros((num_images, im_width, im_height, num_channel), dtype=np.uint8)
+    color_masks[:, :, :, 0] = masks[:, :, :, 0] * PIXEL_DEPTH
+    if num_channel == 4:
+        color_masks[:, :, :, 3] = masks[:, :, :, 0] * PIXEL_DEPTH
+    images = img_float_to_uint8(images)
+
+    return (1 - fade) * images + fade * color_masks
 
 
-def image_from_predictions(predictions, patch_size, im_width, im_height):
-    im = np.ndarray(shape=(im_height, im_width))
-    i = 0
-    for x in range(0, im_width, patch_size):
-        for y in range(0, im_height, patch_size):
-            im[y:y+patch_size,x:x+patch_size] = predictions[i]
-            i += 1
+def images_from_patches(patches):
+    """Transform a list of patches into images
 
-    return im
+    patches:
+        array of patches by image. We assume that the image is squared, num_channel should be 1, 3 or 4.
+        shape: [num_images, num_patches, patch_size, patch_size, num_channel]
+
+    returns:
+        num_images square images from 2D concat patches
+    """
+    num_images, num_patches, patch_size, _, num_channel = patches.shape
+    num_patches_side = int(np.sqrt(num_patches))
+    assert np.sqrt(num_patches) == num_patches_side, "Square image assumption broken"
+    image_size = num_patches_side * patch_size
+
+    images = np.ndarray(shape=(num_images, image_size, image_size, num_channel), dtype=patches.dtype)
+
+    for n in range(0, num_images):
+        patch_idx = 0
+        for x in range(0, image_size, patch_size):
+            for y in range(0, image_size, patch_size):
+                images[n, y:y + patch_size, x:x + patch_size] = patches[n, patch_idx]
+                patch_idx += 1
+
+    return images
+
+
+def predictions_to_patches(predictions, patch_size):
+    """Expand each prediction to a square patch
+
+    predictions:
+        array of prediction
+        shape: [num_predictions,]
+
+    returns:
+        [num_predictions, patch_size, patch_size, 1]
+    """
+    num_predictions = predictions.shape[0]
+    predictions = np.resize(predictions, (num_predictions, 1, 1, 1))
+    patches = np.broadcast_to(predictions, (num_predictions, patch_size, patch_size, 1))
+    return patches

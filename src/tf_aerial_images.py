@@ -3,36 +3,24 @@ from datetime import datetime
 
 import numpy as np
 import tensorflow as tf
-import os
 
 import images
-from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT, PATCHES_PER_IMAGE
+from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, PATCHES_PER_IMAGE
 
-DEFAULT_SAVE_PATH = os.path.abspath("./runs")
-DEFAULT_TRAIN_DATA_DIR = os.path.abspath("./data/training")
-DEFAULT_EVAL_DATA_DIR = None
-DEFAULT_RESTORE_MODEL = False
-DEFAULT_NUM_EPOCH = 5
-DEFAULT_BATCH_SIZE = 25
-DEFAULT_LR = 0.01
-DEFAULT_MOMENTUM = 0.01
-DEFAULT_LAMBDA_REG = 5e-4
-DEFAULT_SEED = 2017
-DEFAULT_EVAL_EVERY = 500
-DEFAULT_NUM_EVAL_IMAGES = 10
-
-tf.app.flags.DEFINE_string('save_path', DEFAULT_SAVE_PATH, "Directory where to write event logs and checkpoint")
-tf.app.flags.DEFINE_string('train_data_dir', DEFAULT_TRAIN_DATA_DIR, "Directory containing training images/ groundtruth/")
-tf.app.flags.DEFINE_string('eval_data_dir', DEFAULT_EVAL_DATA_DIR, "Directory containing eval images")
-tf.app.flags.DEFINE_boolean('restore_model', DEFAULT_RESTORE_MODEL, "Restore the model from previous checkpoint")
-tf.app.flags.DEFINE_integer('num_epoch', DEFAULT_NUM_EPOCH, "Number of pass on the dataset during training")
-tf.app.flags.DEFINE_integer('batch_size', DEFAULT_BATCH_SIZE, "Batch size of training instances")
-tf.app.flags.DEFINE_float('lr', DEFAULT_LR, "Initial learning rate")
-tf.app.flags.DEFINE_float('momentum', DEFAULT_MOMENTUM, "Momentum")
-tf.app.flags.DEFINE_float('lambda_reg', DEFAULT_LAMBDA_REG, "Weight regularizer")
-tf.app.flags.DEFINE_integer('seed', DEFAULT_SEED, "Random seed for reproducibility")
-tf.app.flags.DEFINE_integer('eval_every', DEFAULT_EVAL_EVERY, "Number of steps between evaluations")
-tf.app.flags.DEFINE_integer('num_eval_images', DEFAULT_NUM_EVAL_IMAGES, "Number of images to predict for an evaluation")
+tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
+                           "Directory where to write event logs and checkpoint")
+tf.app.flags.DEFINE_string('train_data_dir', os.path.abspath("./data/training"),
+                           "Directory containing training images/ groundtruth/")
+tf.app.flags.DEFINE_string('eval_data_dir', None, "Directory containing eval images")
+tf.app.flags.DEFINE_boolean('restore_model', False, "Restore the model from previous checkpoint")
+tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")
+tf.app.flags.DEFINE_integer('batch_size', 25, "Batch size of training instances")
+tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
+tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
+tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
+tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
+tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
+tf.app.flags.DEFINE_integer('num_eval_images', 10, "Number of images to predict for an evaluation")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -74,7 +62,7 @@ class ConvolutionalModel:
         self.summary_ops = []
         self.build_graph()
 
-        summary_path = os.path.join(options.save_path, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+        summary_path = os.path.join(options.save_path, datetime.now().strftime("%Y-%m-%dT%Hh%Mm%Ss"))
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
     def forward(self, patches):
@@ -234,10 +222,10 @@ class ConvolutionalModel:
 
         # Extract it into np arrays.
         train_images = images.load(train_data_dir)
-        train_data = images.extract_patches(IMG_PATCH_SIZE, *train_images)
+        train_data = images.extract_patches(train_images, IMG_PATCH_SIZE)
 
         train_groundtruth = images.load(train_labels_dir)
-        train_groundtruth_patches = images.extract_patches(IMG_PATCH_SIZE, *train_groundtruth)
+        train_groundtruth_patches = images.extract_patches(train_groundtruth, IMG_PATCH_SIZE)
         train_labels = images.labels_for_patches(train_groundtruth_patches)
 
         opts.num_train_patches = train_labels.shape[0]
@@ -287,20 +275,24 @@ class ConvolutionalModel:
                     }
                     eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
 
-                # reconstruct original images and masks
+                # reconstruct original images
                 original_images_patches = self.patches[:opts.num_patches_eval]
-                display_images = np.ndarray(shape=(opts.num_eval_images, IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CHANNELS + 1))
+                new_shape = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS)
+                original_images_patches = np.resize(original_images_patches, new_shape)
+                images_display = images.images_from_patches(original_images_patches)
 
-                for i, offset in enumerate(range(0, opts.num_eval_images * PATCHES_PER_IMAGE, PATCHES_PER_IMAGE)):
-                    original_image = images.image_from_patches(
-                        original_images_patches[offset:offset + PATCHES_PER_IMAGE], IMAGE_WIDTH, IMAGE_HEIGHT)
-                    mask = images.image_from_predictions(
-                        eval_predictions[offset:offset + PATCHES_PER_IMAGE], IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT)
-                    overlay = np.array(images.overlay(original_image, mask))
-                    display_images[i, :, :, :] = overlay
+                # construct masks
+                mask_patches = images.predictions_to_patches(eval_predictions, IMG_PATCH_SIZE)
+                new_size = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
+                mask_patches = np.resize(mask_patches, new_size)
+                masks = images.images_from_patches(mask_patches)
 
+                # blend for overlays
+                overlays = images.overlays(images_display, masks)
+
+                # display in summary
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
-                                                    feed_dict={self._images_to_display: display_images})
+                                                    feed_dict={self._images_to_display: overlays})
                 self.summary_writer.add_summary(image_sum, global_step=step)
 
         # save the missclassification rate over the epoch
