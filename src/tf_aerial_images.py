@@ -3,22 +3,36 @@ from datetime import datetime
 
 import numpy as np
 import tensorflow as tf
+import os
 
 import images
 from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, IMAGE_WIDTH, IMAGE_HEIGHT, PATCHES_PER_IMAGE
 
-tf.app.flags.DEFINE_string('save_path', './runs', "Directory where to write event logs and checkpoint")
-tf.app.flags.DEFINE_string('train_data_dir', './data/training', "Directory containing training images/ groundtruth/")
-tf.app.flags.DEFINE_string('eval_data_dir', None, "Directory containing eval images")
-tf.app.flags.DEFINE_boolean('restore_model', False, "Restore the model from previous checkpoint")
-tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")
-tf.app.flags.DEFINE_integer('batch_size', 64, "Batch size of training instances")
-tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
-tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
-tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
-tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
-tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
-tf.app.flags.DEFINE_integer('num_eval_images', 10, "Number of images to predict for an evaluation")
+DEFAULT_SAVE_PATH = os.path.abspath("./runs")
+DEFAULT_TRAIN_DATA_DIR = os.path.abspath("./data/training")
+DEFAULT_EVAL_DATA_DIR = None
+DEFAULT_RESTORE_MODEL = False
+DEFAULT_NUM_EPOCH = 5
+DEFAULT_BATCH_SIZE = 25
+DEFAULT_LR = 0.01
+DEFAULT_MOMENTUM = 0.01
+DEFAULT_LAMBDA_REG = 5e-4
+DEFAULT_SEED = 2017
+DEFAULT_EVAL_EVERY = 500
+DEFAULT_NUM_EVAL_IMAGES = 10
+
+tf.app.flags.DEFINE_string('save_path', DEFAULT_SAVE_PATH, "Directory where to write event logs and checkpoint")
+tf.app.flags.DEFINE_string('train_data_dir', DEFAULT_TRAIN_DATA_DIR, "Directory containing training images/ groundtruth/")
+tf.app.flags.DEFINE_string('eval_data_dir', DEFAULT_EVAL_DATA_DIR, "Directory containing eval images")
+tf.app.flags.DEFINE_boolean('restore_model', DEFAULT_RESTORE_MODEL, "Restore the model from previous checkpoint")
+tf.app.flags.DEFINE_integer('num_epoch', DEFAULT_NUM_EPOCH, "Number of pass on the dataset during training")
+tf.app.flags.DEFINE_integer('batch_size', DEFAULT_BATCH_SIZE, "Batch size of training instances")
+tf.app.flags.DEFINE_float('lr', DEFAULT_LR, "Initial learning rate")
+tf.app.flags.DEFINE_float('momentum', DEFAULT_MOMENTUM, "Momentum")
+tf.app.flags.DEFINE_float('lambda_reg', DEFAULT_LAMBDA_REG, "Weight regularizer")
+tf.app.flags.DEFINE_integer('seed', DEFAULT_SEED, "Random seed for reproducibility")
+tf.app.flags.DEFINE_integer('eval_every', DEFAULT_EVAL_EVERY, "Number of steps between evaluations")
+tf.app.flags.DEFINE_integer('num_eval_images', DEFAULT_NUM_EVAL_IMAGES, "Number of images to predict for an evaluation")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -60,7 +74,7 @@ class ConvolutionalModel:
         self.summary_ops = []
         self.build_graph()
 
-        summary_path = os.path.join(options.save_path, datetime.now().isoformat('T', 'seconds'))
+        summary_path = os.path.join(options.save_path, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
     def forward(self, patches):
@@ -215,8 +229,8 @@ class ConvolutionalModel:
         """load images, create patches and labels"""
         opts = self._options
 
-        train_data_dir = os.path.join(opts.train_data_dir, 'images/')
-        train_labels_dir = os.path.join(opts.train_data_dir, 'groundtruth/')
+        train_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'images/'))
+        train_labels_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'groundtruth/'))
 
         # Extract it into np arrays.
         train_images = images.load(train_data_dir)
