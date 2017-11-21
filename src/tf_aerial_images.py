@@ -246,60 +246,70 @@ class ConvolutionalModel:
         num_errors = 0
         total = 0
 
-        for batch_i, offset in enumerate(range(0, opts.num_train_patches - opts.batch_size, opts.batch_size)):
-            batch_indices = indices[offset:offset + opts.batch_size]
-            feed_dict = {
-                self._patches_node: self.patches[batch_indices, :, :, :],
-                self._labels_node: self.labels[batch_indices]
-            }
+        if opts.restore_model:
+            # Restore variables from disk
+            self.saver.restore(self._session, opts.train_data_dir + "/model.chkpt")
+            print("Model restored from checkpoint.")
 
-            summary_str, _, l, lr, predictions, predictions, step = self._session.run(
-                [self.summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions,
-                 self._global_step],
-                feed_dict=feed_dict)
+        else:
+            for batch_i, offset in enumerate(range(0, opts.num_train_patches - opts.batch_size, opts.batch_size)):
+                batch_indices = indices[offset:offset + opts.batch_size]
+                feed_dict = {
+                    self._patches_node: self.patches[batch_indices, :, :, :],
+                    self._labels_node: self.labels[batch_indices]
+                }
 
-            self.summary_writer.add_summary(summary_str, global_step=step)
+                summary_str, _, l, lr, predictions, predictions, step = self._session.run(
+                    [self.summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions,
+                     self._global_step],
+                    feed_dict=feed_dict)
 
-            num_errors += np.abs(self.labels[batch_indices] - predictions).sum()
-            total += opts.batch_size
+                self.summary_writer.add_summary(summary_str, global_step=step)
 
-            # from time to time do full prediction on some images
-            if step > 0 and step % opts.eval_every == 0:
-                eval_predictions = np.ndarray(shape=(opts.num_patches_eval,))
+                num_errors += np.abs(self.labels[batch_indices] - predictions).sum()
+                total += opts.batch_size
 
-                for batch in range(opts.num_batches_eval):
-                    offset = batch * opts.batch_size
+                # from time to time do full prediction on some images
+                if step > 0 and step % opts.eval_every == 0:
+                    eval_predictions = np.ndarray(shape=(opts.num_patches_eval,))
 
-                    feed_dict = {
-                        self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
-                    }
-                    eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
+                    for batch in range(opts.num_batches_eval):
+                        offset = batch * opts.batch_size
 
-                # reconstruct original images
-                original_images_patches = self.patches[:opts.num_patches_eval]
-                new_shape = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS)
-                original_images_patches = np.resize(original_images_patches, new_shape)
-                images_display = images.images_from_patches(original_images_patches)
+                        feed_dict = {
+                            self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
+                        }
+                        eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
 
-                # construct masks
-                mask_patches = images.predictions_to_patches(eval_predictions, IMG_PATCH_SIZE)
-                new_size = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
-                mask_patches = np.resize(mask_patches, new_size)
-                masks = images.images_from_patches(mask_patches)
+                    # reconstruct original images
+                    original_images_patches = self.patches[:opts.num_patches_eval]
+                    new_shape = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS)
+                    original_images_patches = np.resize(original_images_patches, new_shape)
+                    images_display = images.images_from_patches(original_images_patches)
 
-                # blend for overlays
-                overlays = images.overlays(images_display, masks)
+                    # construct masks
+                    mask_patches = images.predictions_to_patches(eval_predictions, IMG_PATCH_SIZE)
+                    new_size = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
+                    mask_patches = np.resize(mask_patches, new_size)
+                    masks = images.images_from_patches(mask_patches)
 
-                # display in summary
-                image_sum, step = self._session.run([self._image_summary, self._global_step],
-                                                    feed_dict={self._images_to_display: overlays})
-                self.summary_writer.add_summary(image_sum, global_step=step)
+                    # blend for overlays
+                    overlays = images.overlays(images_display, masks)
 
-        # save the missclassification rate over the epoch
-        misclassification, step = self._session.run([self.misclassification_summary, self._global_step],
-                                                    feed_dict={self._missclassification_rate: num_errors / total})
-        self.summary_writer.add_summary(misclassification, global_step=step)
-        self.summary_writer.flush()
+                    # display in summary
+                    image_sum, step = self._session.run([self._image_summary, self._global_step],
+                                                        feed_dict={self._images_to_display: overlays})
+                    self.summary_writer.add_summary(image_sum, global_step=step)
+
+            # save the missclassification rate over the epoch
+            misclassification, step = self._session.run([self.misclassification_summary, self._global_step],
+                                                        feed_dict={self._missclassification_rate: num_errors / total})
+            self.summary_writer.add_summary(misclassification, global_step=step)
+            self.summary_writer.flush()
+
+            # create checkpoint
+            save_path = self.saver.save(self._session, opts.train_data_dir + "/model.ckpt")
+            print("Model saved in file: {}".format(save_path))
 
 
 def main(_):
