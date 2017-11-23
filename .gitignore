@@ -1,7 +1,6 @@
 predictions_eval/
 predictions_training/
 data-sample/
-models/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
