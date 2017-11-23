@@ -137,3 +137,12 @@ def predictions_to_patches(predictions, patch_size):
     predictions = np.resize(predictions, (num_predictions, 1, 1, 1))
     patches = np.broadcast_to(predictions, (num_predictions, patch_size, patch_size, 1))
     return patches
+
+def save_all(images, directory, format_="images_{:03d}.png"):
+    """Save the `images` in the `directory`
+    images: 3D or 4D tensor of images (with or without channels)
+    directory: target directory
+    format: naming with a placeholder for a integer index
+    """
+    for n in range(images.shape[0]):
+        mpimg.imsave(directory + format_.format(n + 1), images[n])

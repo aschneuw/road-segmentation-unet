@@ -1,4 +1,5 @@
 import os
+import glob
 from datetime import datetime
 
 import numpy as np
@@ -305,26 +306,28 @@ class ConvolutionalModel:
 
 
 
-    def save(self):
+    def save(self, epoch=0):
         opts = self._options
-        model_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'model.chkpt'))
-        save_path = self.saver.save(self._session, model_data_dir )
+        model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-{:03d}.chkpt'.format(epoch)))
+        saved_path = self.saver.save(self._session, model_data_dir )
         # create checkpoint
-        print("Model saved in file: {}".format(save_path))
+        print("Model saved in file: {}".format(saved_path))
 
     def restore(self):
         opts = self._options
         # Restore variables from disk
-        model_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'model.chkpt'))
-        self.saver.restore(self._session, model_data_dir)
-        print("Model restored from checkpoint.")
+        model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-*.chkpt.meta'))
+        # get latest saved model
+        latest_model_filename = sorted(glob.glob(model_data_dir))[-1][:-5]
+        self.saver.restore(self._session, latest_model_filename)
+        print("Model restored from from file: {}".format(latest_model_filename))
 
 
 def main(_):
     opts = Options()
 
-    with tf.Graph().as_default(), tf.Session() as session:
-        with tf.device("/cpu:0"):
+    with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
+        with tf.device("/gpu:0"):
             model = ConvolutionalModel(opts, session)
 
         if opts.restore_model:
@@ -333,8 +336,7 @@ def main(_):
             for i in range(opts.num_epoch):
                 print("Train epoch: {}".format(i))
                 model.train()  # Process one epoch
-            # Save model to disk
-            model.save()
+                model.save(i)   # Save model to disk
 
 
 if __name__ == '__main__':
