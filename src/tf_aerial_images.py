@@ -1,4 +1,5 @@
-import os, glob
+import os
+import glob
 from datetime import datetime
 
 import numpy as np
@@ -307,15 +308,15 @@ class ConvolutionalModel:
 
     def save(self, epoch=0):
         opts = self._options
-        model_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'models/model-epoch-{:03d}.chkpt'.format(epoch)))
-        save_path = self.saver.save(self._session, model_data_dir )
+        model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-{:03d}.chkpt'.format(epoch)))
+        saved_path = self.saver.save(self._session, model_data_dir )
         # create checkpoint
-        print("Model saved in file: {}".format(save_path))
+        print("Model saved in file: {}".format(saved_path))
 
     def restore(self):
         opts = self._options
         # Restore variables from disk
-        model_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'models/model-epoch-*.chkpt.meta'))
+        model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-*.chkpt.meta'))
         # get latest saved model
         latest_model_filename = sorted(glob.glob(model_data_dir))[-1][:-5]
         self.saver.restore(self._session, latest_model_filename)
