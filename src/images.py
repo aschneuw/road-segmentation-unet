@@ -14,6 +14,7 @@ def img_float_to_uint8(img):
 
 def load(directory):
     """Extract the images in `directory` into a tensor [num_images, height, width(, channels)]"""
+    print('Loading images from {} ...'.format(directory))
     images = []
     for i, file_path in enumerate(glob.glob(os.path.join(directory, '*.png'))):
         img = mpimg.imread(file_path)
