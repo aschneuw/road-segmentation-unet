@@ -1,3 +1,4 @@
+import code
 import os
 import glob
 from datetime import datetime
@@ -14,6 +15,7 @@ tf.app.flags.DEFINE_string('train_data_dir', os.path.abspath("./data/training"),
                            "Directory containing training images/ groundtruth/")
 tf.app.flags.DEFINE_string('eval_data_dir', None, "Directory containing eval images")
 tf.app.flags.DEFINE_boolean('restore_model', False, "Restore the model from previous checkpoint")
+tf.app.flags.DEFINE_boolean('interactive', False, "Spawn interactive Tensorflow session")
 tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")
 tf.app.flags.DEFINE_integer('batch_size', 25, "Batch size of training instances")
 tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
@@ -21,7 +23,7 @@ tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
 tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
 tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
 tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
-tf.app.flags.DEFINE_integer('num_eval_images', 10, "Number of images to predict for an evaluation")
+tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -43,6 +45,7 @@ class Options(object):
         self.lambda_reg = FLAGS.lambda_reg
         self.num_eval_images = FLAGS.num_eval_images
         self.num_train_patches = None
+        self.interactive = FLAGS.interactive
 
         self.num_patches_eval = self.num_eval_images * PATCHES_PER_IMAGE
 
@@ -220,8 +223,6 @@ class ConvolutionalModel:
 
         train_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'images/'))
         train_labels_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'groundtruth/'))
-        print("Train data {}".format(train_data_dir))
-        print("Train labels {}".format(train_labels_dir))
 
         # Extract it into np arrays.
         train_images = images.load(train_data_dir)
@@ -332,11 +333,14 @@ def main(_):
 
         if opts.restore_model:
             model.restore()
-        else:
-            for i in range(opts.num_epoch):
-                print("Train epoch: {}".format(i))
-                model.train()  # Process one epoch
-                model.save(i)   # Save model to disk
+
+        for i in range(opts.num_epoch):
+            print("Train epoch: {}".format(i))
+            model.train()  # Process one epoch
+            model.save(i)   # Save model to disk
+
+        if opts.interactive:
+            code.interact(local=locals())
 
 
 if __name__ == '__main__':
