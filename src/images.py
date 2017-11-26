@@ -4,8 +4,9 @@ import re
 
 import matplotlib.image as mpimg
 import numpy as np
+from datetime import datetime
 
-from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
+from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD, IMG_PATCH_SIZE
 
 
 def img_float_to_uint8(img):
@@ -161,12 +162,12 @@ def mask_to_submission_strings(image_filename):
     """Reads a single image and outputs the strings that should go into the submission file"""
     img_number = int(re.search(r"\d+", image_filename).group(0))
     im = mpimg.imread(image_filename)
-    patch_size = 16
+    patch_size = IMG_PATCH_SIZE
     for j in range(0, im.shape[1], patch_size):
         for i in range(0, im.shape[0], patch_size):
             patch = im[i:i + patch_size, j:j + patch_size]
             label = patch_to_label(patch)
-            yield("{:03d}_{}_{},{}".format(img_number, j, i, label))
+            yield ("{:03d}_{}_{},{}".format(img_number, j, i, label))
 
 
 def masks_to_submission(submission_filename, *image_filenames):
@@ -176,10 +177,14 @@ def masks_to_submission(submission_filename, *image_filenames):
         for fn in image_filenames[0:]:
             f.writelines('{}\n'.format(s) for s in mask_to_submission_strings(fn))
 
-def create_submission_csv(path, submission_filename='./submission.csv'):
+def create_submission_csv(data_path, submission_path):
+    submission_filename = './submission-{}.csv'.format(datetime.now().strftime("%Y-%m-%dT%Hh%Mm%Ss"))
     image_filenames = []
     for i in range(1, 51):
-        image_filename = "{}/groundtruth/satImage_{:03d}.png".format(path, i)
-        print(image_filename)
-        image_filenames.append(image_filename)
-    masks_to_submission(submission_filename, *image_filenames)
+        image_filename = "groundtruth/satImage_{:03d}.png".format(i)
+        image_path = os.path.abspath(os.path.join(data_path, image_filename))
+        print(image_path)
+        image_filenames.append(image_path)
+    submission_path = os.path.abspath(os.path.join(submission_path, submission_filename))
+    masks_to_submission(submission_path, *image_filenames)
+    print("Submission file written to: {}".format(submission_path))
