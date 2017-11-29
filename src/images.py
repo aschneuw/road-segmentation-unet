@@ -70,7 +70,7 @@ def labels_for_patches(patches):
         [num_batches, ]
     """
     foreground = patches.mean(axis=(1, 2)) > FOREGROUND_THRESHOLD
-    return np.int64(foreground)
+    return foreground.astype(np.int64)
 
 
 def overlays(images, masks, fade=0.2):
@@ -139,6 +139,7 @@ def predictions_to_patches(predictions, patch_size):
     patches = np.broadcast_to(predictions, (num_predictions, patch_size, patch_size, 1))
     return patches
 
+
 def save_all(images, directory, format_="images_{:03d}.png"):
     """Save the `images` in the `directory`
     images: 3D or 4D tensor of images (with or without channels)
@@ -147,3 +148,30 @@ def save_all(images, directory, format_="images_{:03d}.png"):
     """
     for n in range(images.shape[0]):
         mpimg.imsave(directory + format_.format(n + 1), images[n])
+
+
+def save_submission_csv(masks, filename, patch_size):
+    """Save the masks in the expected format for submission
+    masks: [num_mask, mask_height, mask_width] with 1 for road, 0 for other
+    path: target CSV file path, will remove existing
+    """
+    num_mask, mask_height, mask_width = masks.shape
+    assert mask_height == mask_width, "images should be square"
+    patches_per_side = int(mask_height / patch_size)
+
+    patches = extract_patches(masks, patch_size)
+    labels = labels_for_patches(patches)
+    labels_per_image = labels.resize((num_mask, patches_per_side, patches_per_side))
+
+    if os.path.exists(filename):
+        print("Delete old file {}".format(filename))
+        os.remove(filename)
+
+    with open(filename, 'w') as file:
+        print("Saving predictions in {}".format(filename))
+        for image_idx in range(num_mask):
+            for j in range(patches_per_side):
+                for i in range(patches_per_side):
+                    label = labels_per_image[image_idx, j, i]
+                    file.write("{:03d}_{}_{},{}\n".format(image_idx, j, i, label))
+        print("Done")
