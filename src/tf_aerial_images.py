@@ -1,6 +1,6 @@
 import code
-import os
 import glob
+import os
 from datetime import datetime
 
 import numpy as np
@@ -196,12 +196,16 @@ class ConvolutionalModel:
                                      shape=(opts.batch_size,))
 
         predict_logits = self.forward(patches_node)
+        predictions = tf.argmax(predict_logits, axis=1)
         loss = self.cross_entropy_loss(labels_node, predict_logits)
-        self.summary_ops.append(tf.summary.scalar("loss", loss))
-        self._train = self.optimize(loss)
 
-        self._predictions = tf.argmax(predict_logits, axis=1)
+        self.add_metrics_summary(labels_node, predictions)
+
+        self._train = self.optimize(loss)
+        self.summary_ops.append(tf.summary.scalar("loss", loss))
+
         self._loss = loss
+        self._predictions = predictions
         self._patches_node = patches_node
         self._labels_node = labels_node
         self._predict_logits = predict_logits
@@ -214,8 +218,21 @@ class ConvolutionalModel:
 
         # Properly initialize all variables.
         tf.global_variables_initializer().run()
+        tf.local_variables_initializer().run()
 
         self.saver = tf.train.Saver()
+
+    def add_metrics_summary(self, labels, predictions):
+        """add accuracy, precision, recall, f1_score to tensorboard"""
+        accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
+        recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
+        precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
+        f1_score = 2 / (1 / recall + 1 / precision)
+
+        self.summary_ops.append(tf.summary.scalar("accuracy", accuracy))
+        self.summary_ops.append(tf.summary.scalar("recall", recall))
+        self.summary_ops.append(tf.summary.scalar("precision", precision))
+        self.summary_ops.append(tf.summary.scalar("f1_score", f1_score))
 
     def prepare_data(self):
         """load images, create patches and labels"""
@@ -305,12 +322,10 @@ class ConvolutionalModel:
         self.summary_writer.add_summary(misclassification, global_step=step)
         self.summary_writer.flush()
 
-
-
     def save(self, epoch=0):
         opts = self._options
         model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-{:03d}.chkpt'.format(epoch)))
-        saved_path = self.saver.save(self._session, model_data_dir )
+        saved_path = self.saver.save(self._session, model_data_dir)
         # create checkpoint
         print("Model saved in file: {}".format(saved_path))
 
@@ -336,8 +351,9 @@ def main(_):
 
         for i in range(opts.num_epoch):
             print("Train epoch: {}".format(i))
+            tf.local_variables_initializer().run()  # Reset scores
             model.train()  # Process one epoch
-            model.save(i)   # Save model to disk
+            model.save(i)  # Save model to disk
 
         if opts.interactive:
             code.interact(local=locals())
