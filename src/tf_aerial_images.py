@@ -10,11 +10,14 @@ import images
 from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
-                           "Directory where to write event logs and checkpoint")
+                           "Directory where to write checkpoints, overlays and submissions")
+tf.app.flags.DEFINE_string('log_dir', os.path.abspath("./log_dir"),
+                           "Directory where to write logfiles")
 tf.app.flags.DEFINE_string('train_data_dir', os.path.abspath("./data/training"),
                            "Directory containing training images/ groundtruth/")
 tf.app.flags.DEFINE_string('eval_data_dir', None, "Directory containing eval images")
 tf.app.flags.DEFINE_boolean('restore_model', False, "Restore the model from previous checkpoint")
+tf.app.flags.DEFINE_string('restore_date', None, "Restore the model from specific date")
 tf.app.flags.DEFINE_boolean('interactive', False, "Spawn interactive Tensorflow session")
 tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")
 tf.app.flags.DEFINE_integer('batch_size', 25, "Batch size of training instances")
@@ -33,9 +36,11 @@ class Options(object):
 
     def __init__(self):
         self.save_path = FLAGS.save_path
+        self.log_dir = FLAGS.log_dir
         self.train_data_dir = FLAGS.train_data_dir
         self.eval_data_dir = FLAGS.eval_data_dir
         self.restore_model = FLAGS.restore_model
+        self.restore_date = FLAGS.restore_date
         self.num_epoch = FLAGS.num_epoch
         self.batch_size = FLAGS.batch_size
         self.seed = FLAGS.seed
@@ -60,7 +65,9 @@ class ConvolutionalModel:
         self.summary_ops = []
         self.build_graph()
 
-        summary_path = os.path.join(options.save_path, datetime.now().strftime("%Y-%m-%dT%Hh%Mm%Ss"))
+        self.experiment_name = datetime.now().strftime("%Y-%m-%dT%Hh%Mm%Ss")
+        experiment_path = os.path.abspath(os.path.join(options.save_path, self.experiment_name))
+        summary_path = os.path.join(options.log_dir, self.experiment_name)
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
     def forward(self, patches):
@@ -346,19 +353,35 @@ class ConvolutionalModel:
 
     def save(self, epoch=0):
         opts = self._options
-        model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-{:03d}.chkpt'.format(epoch)))
+        model_data_dir = os.path.abspath(os.path.join(opts.save_path, self.experiment_name, 'model-epoch-{:03d}.chkpt'.format(epoch)))
         saved_path = self.saver.save(self._session, model_data_dir)
         # create checkpoint
         print("Model saved in file: {}".format(saved_path))
 
-    def restore(self):
+    def restore(self, date=None, epoch=None):
+        """ Restores model from saved checkpoint
+
+        date: which model should be restored (None is most recent)
+        epoch: at which epoch model should be restored (None is most recent)
+        """
         opts = self._options
-        # Restore variables from disk
-        model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-*.chkpt.meta'))
-        # get latest saved model
-        latest_model_filename = sorted(glob.glob(model_data_dir))[-1][:-5]
-        self.saver.restore(self._session, latest_model_filename)
-        print("Model restored from from file: {}".format(latest_model_filename))
+
+        # get experiment name to restore from
+        if date is None:
+            dates = [date for date in glob.glob(os.path.join(opts.save_path, "*")) if os.path.isdir(date)]
+            model_data_dir = sorted(dates)[-1]
+        else:
+            model_data_dir = os.path.abspath(os.path.join(opts.save_path, date))
+
+        # get epoch construct final path
+        if epoch is None:
+            model_data_dir = os.path.abspath(os.path.join(model_data_dir, 'model-epoch-*.chkpt.meta'))
+            model_data_dir = sorted(glob.glob(model_data_dir))[-1][:-5]
+        else:
+            model_data_dir = os.path.abspath(os.path.join(opts.save_path, 'model-epoch-{:03d}.chkpt'.format(epoch)))
+
+        self.saver.restore(self._session, model_data_dir)
+        print("Model restored from from file: {}".format(model_data_dir))
 
 
 def main(_):
@@ -369,7 +392,8 @@ def main(_):
             model = ConvolutionalModel(opts, session)
 
         if opts.restore_model:
-            model.restore()
+            print("Restore date: {}".format(opts.restore_date))
+            model.restore(date=opts.restore_date)
 
         for i in range(opts.num_epoch):
             print("==== Train epoch: {} ====".format(i))
@@ -382,8 +406,9 @@ def main(_):
             eval_images = images.load(opts.eval_data_dir)
             masks = model.predict(eval_images)
             overlays = images.overlays(eval_images, masks)
-            images.save_all(overlays, "preds/")
-            images.save_submission_csv(masks, "submission.csv", IMG_PATCH_SIZE)
+            save_dir = os.path.abspath(os.path.join(opts.save_path, model.experiment_name))
+            images.save_all(overlays, save_dir)
+            images.save_submission_csv(masks, os.path.join(save_dir, "submission.csv"), IMG_PATCH_SIZE)
 
         if opts.interactive:
             code.interact(local=locals())

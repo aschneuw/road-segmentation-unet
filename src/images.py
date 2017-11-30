@@ -92,9 +92,11 @@ def overlays(images, masks, fade=0.2):
     color_masks[:, :, :, 0] = masks[:, :, :, 0] * PIXEL_DEPTH
     if num_channel == 4:
         color_masks[:, :, :, 3] = masks[:, :, :, 0] * PIXEL_DEPTH
+
+    images = (1 - fade) * images + fade * color_masks
     images = img_float_to_uint8(images)
 
-    return (1 - fade) * images + fade * color_masks
+    return images
 
 
 def images_from_patches(patches):
@@ -146,6 +148,10 @@ def save_all(images, directory, format_="images_{:03d}.png"):
     directory: target directory
     format: naming with a placeholder for a integer index
     """
+
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     if len(images.shape) == 4 and images.shape[-1] == 1:
         images = images.squeeze(-1)
 
@@ -153,7 +159,7 @@ def save_all(images, directory, format_="images_{:03d}.png"):
         mpimg.imsave(os.path.join(directory, format_.format(n + 1)), images[n])
 
 
-def save_submission_csv(masks, filename, patch_size):
+def save_submission_csv(masks, path, patch_size):
     """Save the masks in the expected format for submission
 
     masks: binary mask at pixel level with 1 for road, 0 for other
@@ -171,9 +177,10 @@ def save_submission_csv(masks, filename, patch_size):
     labels = labels_for_patches(patches)
     labels.resize((num_mask, patches_per_side, patches_per_side))
 
-    if os.path.exists(filename):
-        print("Delete old file {}".format(filename))
-        os.remove(filename)
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+    filename = os.path.abspath(os.path.join(path, "submission.csv"))
 
     with open(filename, 'w') as file:
         print("Saving predictions in {}".format(filename))

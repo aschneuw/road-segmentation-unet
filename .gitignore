@@ -1,3 +1,8 @@
+# mypy
+.mypy_cache/
+runs/
+log_dir/
+.idea/
 predictions_eval/
 predictions_training/
 data-sample/
@@ -100,8 +105,3 @@ ENV/
 
 # mkdocs documentation
 /site
-
-# mypy
-.mypy_cache/
-runs/
-.idea/
