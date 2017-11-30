@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE, PATCHES_PER_IMAGE
+from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write event logs and checkpoint")
@@ -46,12 +46,6 @@ class Options(object):
         self.num_eval_images = FLAGS.num_eval_images
         self.num_train_patches = None
         self.interactive = FLAGS.interactive
-
-        self.num_patches_eval = self.num_eval_images * PATCHES_PER_IMAGE
-
-        assert self.num_patches_eval % self.batch_size == 0, \
-            'batch_size {} should divide num_patches_eval {}'.format(self.batch_size, self.num_patches_eval)
-        self.num_batches_eval = int(self.num_patches_eval / self.batch_size)
 
 
 class ConvolutionalModel:
@@ -281,6 +275,7 @@ class ConvolutionalModel:
                  self._global_step],
                 feed_dict=feed_dict)
 
+            print("Batch {}\tStep {}".format(batch_i, step), end="\r")
             self.summary_writer.add_summary(summary_str, global_step=step)
 
             num_errors += np.abs(self.labels[batch_indices] - predictions).sum()
@@ -288,6 +283,7 @@ class ConvolutionalModel:
 
             # from time to time do full prediction on some images
             if step > 0 and step % opts.eval_every == 0:
+                print()
                 images_to_predict = self.train_images[:opts.num_eval_images, :, :, :]
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
@@ -296,6 +292,7 @@ class ConvolutionalModel:
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
                                                     feed_dict={self._images_to_display: overlays})
                 self.summary_writer.add_summary(image_sum, global_step=step)
+        print()
 
         # save the missclassification rate over the epoch
         misclassification, step = self._session.run([self.misclassification_summary, self._global_step],
@@ -312,7 +309,7 @@ class ConvolutionalModel:
         opts = self._options
 
         num_images = imgs.shape[0]
-        print("Running prediction on {} images".format(num_images))
+        print("Running prediction on {} images... ".format(num_images), end="")
 
         patches = images.extract_patches(imgs, IMG_PATCH_SIZE)
         num_patches = patches.shape[0]
@@ -320,10 +317,9 @@ class ConvolutionalModel:
 
         # patches padding to have full batches
         if num_patches % opts.batch_size != 0:
-            num_patches_exp = num_patches - (num_patches % opts.batch_size) + opts.batch_size
-            patches_exp = tf.zeros((num_patches_exp, IMG_PATCH_SIZE, IMG_PATCH_SIZE, num_channel))
-            patches_exp[0:num_patches, :, :, :] = patches
-            patches = patches_exp
+            num_extra_patches = opts.batch_size - (num_patches % opts.batch_size)
+            extra_patches = np.zeros((num_extra_patches, IMG_PATCH_SIZE, IMG_PATCH_SIZE, num_channel))
+            patches = np.concatenate([patches, extra_patches], axis=0)
 
         num_batches = int(patches.shape[0] / opts.batch_size)
         eval_predictions = np.ndarray(shape=(patches.shape[0],))
@@ -345,6 +341,7 @@ class ConvolutionalModel:
         new_size = (num_images, patches_per_image, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
         mask_patches = np.resize(mask_patches, new_size)
         masks = images.images_from_patches(mask_patches)
+        print("Done")
         return masks
 
     def save(self, epoch=0):
@@ -375,7 +372,7 @@ def main(_):
             model.restore()
 
         for i in range(opts.num_epoch):
-            print("Train epoch: {}".format(i))
+            print("==== Train epoch: {} ====".format(i))
             tf.local_variables_initializer().run()  # Reset scores
             model.train()  # Process one epoch
             model.save(i)  # Save model to disk
