@@ -146,22 +146,30 @@ def save_all(images, directory, format_="images_{:03d}.png"):
     directory: target directory
     format: naming with a placeholder for a integer index
     """
+    if len(images.shape) == 4 and images.shape[-1] == 1:
+        images = images.squeeze(-1)
+
     for n in range(images.shape[0]):
-        mpimg.imsave(directory + format_.format(n + 1), images[n])
+        mpimg.imsave(os.path.join(directory, format_.format(n + 1)), images[n])
 
 
 def save_submission_csv(masks, filename, patch_size):
     """Save the masks in the expected format for submission
-    masks: [num_mask, mask_height, mask_width] with 1 for road, 0 for other
+
+    masks: binary mask at pixel level with 1 for road, 0 for other
+        shape: can be 3D [num_mask, mask_height, mask_width] or 4D [num_mask, mask_height, mask_width, 1]
     path: target CSV file path, will remove existing
     """
+    if len(masks.shape) == 4:
+        masks = masks.squeeze(-1)
+
     num_mask, mask_height, mask_width = masks.shape
     assert mask_height == mask_width, "images should be square"
     patches_per_side = int(mask_height / patch_size)
 
     patches = extract_patches(masks, patch_size)
     labels = labels_for_patches(patches)
-    labels_per_image = labels.resize((num_mask, patches_per_side, patches_per_side))
+    labels.resize((num_mask, patches_per_side, patches_per_side))
 
     if os.path.exists(filename):
         print("Delete old file {}".format(filename))
@@ -169,9 +177,10 @@ def save_submission_csv(masks, filename, patch_size):
 
     with open(filename, 'w') as file:
         print("Saving predictions in {}".format(filename))
+        file.write("id,prediction\n")
         for image_idx in range(num_mask):
             for j in range(patches_per_side):
                 for i in range(patches_per_side):
-                    label = labels_per_image[image_idx, j, i]
-                    file.write("{:03d}_{}_{},{}\n".format(image_idx, j, i, label))
+                    label = labels[image_idx, j, i]
+                    file.write("{:03d}_{}_{},{}\n".format(image_idx + 1, patch_size * j, patch_size * i, label))
         print("Done")

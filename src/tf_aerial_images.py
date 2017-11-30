@@ -255,6 +255,8 @@ class ConvolutionalModel:
         print("Number of patches:", opts.num_train_patches)
         print("Ratio of road patches: {:.3f}".format(train_labels.mean()))
 
+        self.train_images = train_images
+
         return train_data, train_labels
 
     def train(self):
@@ -286,30 +288,9 @@ class ConvolutionalModel:
 
             # from time to time do full prediction on some images
             if step > 0 and step % opts.eval_every == 0:
-                eval_predictions = np.ndarray(shape=(opts.num_patches_eval,))
-
-                for batch in range(opts.num_batches_eval):
-                    offset = batch * opts.batch_size
-
-                    feed_dict = {
-                        self._patches_node: self.patches[offset:offset + opts.batch_size, :, :, :],
-                    }
-                    eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
-
-                # reconstruct original images
-                original_images_patches = self.patches[:opts.num_patches_eval]
-                new_shape = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS)
-                original_images_patches = np.resize(original_images_patches, new_shape)
-                images_display = images.images_from_patches(original_images_patches)
-
-                # construct masks
-                mask_patches = images.predictions_to_patches(eval_predictions, IMG_PATCH_SIZE)
-                new_size = (opts.num_eval_images, PATCHES_PER_IMAGE, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
-                mask_patches = np.resize(mask_patches, new_size)
-                masks = images.images_from_patches(mask_patches)
-
-                # blend for overlays
-                overlays = images.overlays(images_display, masks)
+                images_to_predict = self.train_images[:opts.num_eval_images, :, :, :]
+                masks = self.predict(images_to_predict)
+                overlays = images.overlays(images_to_predict, masks)
 
                 # display in summary
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
@@ -321,6 +302,50 @@ class ConvolutionalModel:
                                                     feed_dict={self._missclassification_rate: num_errors / total})
         self.summary_writer.add_summary(misclassification, global_step=step)
         self.summary_writer.flush()
+
+    def predict(self, imgs):
+        """Run inference on `imgs` and return predicted masks
+
+        imgs: [num_images, image_height, image_width, num_channel]
+        returns: masks [num_images, images_height, image_width] with road = 1, other = 0
+        """
+        opts = self._options
+
+        num_images = imgs.shape[0]
+        print("Running prediction on {} images".format(num_images))
+
+        patches = images.extract_patches(imgs, IMG_PATCH_SIZE)
+        num_patches = patches.shape[0]
+        num_channel = imgs.shape[3]
+
+        # patches padding to have full batches
+        if num_patches % opts.batch_size != 0:
+            num_patches_exp = num_patches - (num_patches % opts.batch_size) + opts.batch_size
+            patches_exp = tf.zeros((num_patches_exp, IMG_PATCH_SIZE, IMG_PATCH_SIZE, num_channel))
+            patches_exp[0:num_patches, :, :, :] = patches
+            patches = patches_exp
+
+        num_batches = int(patches.shape[0] / opts.batch_size)
+        eval_predictions = np.ndarray(shape=(patches.shape[0],))
+
+        for batch in range(num_batches):
+            offset = batch * opts.batch_size
+
+            feed_dict = {
+                self._patches_node: patches[offset:offset + opts.batch_size, :, :, :],
+            }
+            eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
+
+        # remove padding
+        eval_predictions = eval_predictions[0:num_patches]
+        patches_per_image = int(num_patches / num_images)
+
+        # construct masks
+        mask_patches = images.predictions_to_patches(eval_predictions, IMG_PATCH_SIZE)
+        new_size = (num_images, patches_per_image, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
+        mask_patches = np.resize(mask_patches, new_size)
+        masks = images.images_from_patches(mask_patches)
+        return masks
 
     def save(self, epoch=0):
         opts = self._options
@@ -354,6 +379,14 @@ def main(_):
             tf.local_variables_initializer().run()  # Reset scores
             model.train()  # Process one epoch
             model.save(i)  # Save model to disk
+
+        if opts.eval_data_dir:
+            print("Running inference on eval data {}".format(opts.eval_data_dir))
+            eval_images = images.load(opts.eval_data_dir)
+            masks = model.predict(eval_images)
+            overlays = images.overlays(eval_images, masks)
+            images.save_all(overlays, "preds/")
+            images.save_submission_csv(masks, "submission.csv", IMG_PATCH_SIZE)
 
         if opts.interactive:
             code.interact(local=locals())
