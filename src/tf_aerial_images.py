@@ -13,7 +13,10 @@ tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write event logs and checkpoint")
 tf.app.flags.DEFINE_string('train_data_dir', os.path.abspath("./data/training"),
                            "Directory containing training images/ groundtruth/")
-tf.app.flags.DEFINE_string('eval_data_dir', None, "Directory containing eval images")
+tf.app.flags.DEFINE_string('eval_data_dir', os.path.abspath("./data/test"),
+                           "Directory containing eval images")
+tf.app.flags.DEFINE_string('submission_dir', os.path.abspath("./submissions"),
+                           "Directory containing submissions")
 tf.app.flags.DEFINE_boolean('restore_model', False, "Restore the model from previous checkpoint")
 tf.app.flags.DEFINE_boolean('interactive', False, "Spawn interactive Tensorflow session")
 tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")

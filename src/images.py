@@ -1,10 +1,12 @@
 import glob
 import os
+import re
 
 import matplotlib.image as mpimg
 import numpy as np
+from datetime import datetime
 
-from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
+from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD, IMG_PATCH_SIZE
 
 
 def img_float_to_uint8(img):
@@ -147,3 +149,28 @@ def save_all(images, directory, format_="images_{:03d}.png"):
     """
     for n in range(images.shape[0]):
         mpimg.imsave(directory + format_.format(n + 1), images[n])
+
+
+def mask_to_submission_strings(mask_number, mask):
+    """Generates submission output for a single mask"""
+    patch_size = IMG_PATCH_SIZE
+    for j in range(0, mask.shape[1], patch_size):
+        for i in range(0, mask.shape[0], patch_size):
+            patch = mask[i:i + patch_size, j:j + patch_size]
+            label = int(np.mean(patch) > FOREGROUND_THRESHOLD)
+            yield "{:03d}_{}_{},{}".format(mask_number, j, i, label)
+
+def save_submission_csv(masks, path):
+    """Save the masks in the expected format for submission
+    masks: [num_mask, mask_height, mask_width] with 1 for road, 0 for other
+    path: target CSV file path, will add new submission with datetime in filename
+    """
+    submission_filename = 'submission-{}.csv'.format(datetime.now().strftime("%Y-%m-%dT%Hh%Mm%Ss"))
+    submission_path = os.path.abspath(os.path.join(path, submission_filename))
+
+    with open(submission_path, 'w') as f:
+        f.write('id,prediction\n')
+        for i, mask in enumerate(masks):
+            f.writelines('{}\n'.format(s) for s in mask_to_submission_strings(i, mask))
+
+    print("Submission file written to: {}".format(submission_path))
