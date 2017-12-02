@@ -191,3 +191,26 @@ def save_submission_csv(masks, path, patch_size):
                     label = labels[image_idx, j, i]
                     file.write("{:03d}_{}_{},{}\n".format(image_idx + 1, patch_size * j, patch_size * i, label))
         print("Done")
+
+
+def load_train_data(directory, patch_size):
+    """load images from `directory`, create patches and labels
+
+    returns:
+        images: [num_images, img_height, img_width, num_channel]
+        labels: [num_images, num_patches_side, num_patches_side]
+    """
+    train_data_dir = os.path.abspath(os.path.join(directory, 'images/'))
+    train_labels_dir = os.path.abspath(os.path.join(directory, 'groundtruth/'))
+
+    train_images = load(train_data_dir)
+
+    num_images, img_height, img_width, num_channel = train_images.shape
+    num_patches_side = int(img_height / patch_size)
+
+    train_groundtruth = load(train_labels_dir)
+    train_groundtruth_patches = extract_patches(train_groundtruth, patch_size)
+    train_labels = labels_for_patches(train_groundtruth_patches)
+    train_labels = train_labels.reshape((num_images, num_patches_side, num_patches_side))
+
+    return train_images, train_labels

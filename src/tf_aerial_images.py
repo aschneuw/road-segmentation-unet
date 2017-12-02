@@ -49,7 +49,6 @@ class Options(object):
         self.eval_every = FLAGS.eval_every
         self.lambda_reg = FLAGS.lambda_reg
         self.num_eval_images = FLAGS.num_eval_images
-        self.num_train_patches = None
         self.interactive = FLAGS.interactive
 
 
@@ -59,7 +58,7 @@ class ConvolutionalModel:
     def __init__(self, options, session):
         self._options: Options = options
         self._session = session
-        self.patches, self.labels = self.prepare_data()
+
         np.random.seed(options.seed)
 
         self.summary_ops = []
@@ -159,21 +158,8 @@ class ConvolutionalModel:
         """Build the graph to optimize the loss function."""
         opts = self._options
 
-        # Optimizer nodes.
-        # Exponential learning rate decay.
-        lr = tf.train.exponential_decay(
-            learning_rate=opts.lr,
-            global_step=opts.batch_size * self._global_step,
-            decay_steps=opts.num_train_patches,
-            decay_rate=0.95,
-            staircase=True,
-            name='learning_rate')
-
-        self._lr = lr
-        self.summary_ops.append(tf.summary.scalar('learning_rate', lr))
-
         # Use simple momentum for the optimization.
-        optimizer = tf.train.GradientDescentOptimizer(lr)
+        optimizer = tf.train.AdamOptimizer(learning_rate=opts.lr)
         train = optimizer.minimize(loss, global_step=self._global_step)
         return train
 
@@ -235,63 +221,47 @@ class ConvolutionalModel:
         self.summary_ops.append(tf.summary.scalar("precision", precision))
         self.summary_ops.append(tf.summary.scalar("f1_score", f1_score))
 
-    def prepare_data(self):
-        """load images, create patches and labels"""
+    def train(self, imgs, labels):
+        """Train the model for one epoch
+
+        params:
+            imgs: [num_images, img_height, img_width, num_channel]
+            labels: [num_images, num_patches_side, num_patches_side]
+        """
         opts = self._options
 
-        train_data_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'images/'))
-        train_labels_dir = os.path.abspath(os.path.join(opts.train_data_dir, 'groundtruth/'))
+        patches = images.extract_patches(imgs, IMG_PATCH_SIZE)
+        labels_flat = labels.ravel()
+        num_train_patches = patches.shape[0]
 
-        # Extract it into np arrays.
-        train_images = images.load(train_data_dir)
-        train_data = images.extract_patches(train_images, IMG_PATCH_SIZE)
-
-        train_groundtruth = images.load(train_labels_dir)
-        train_groundtruth_patches = images.extract_patches(train_groundtruth, IMG_PATCH_SIZE)
-        train_labels = images.labels_for_patches(train_groundtruth_patches)
-
-        opts.num_train_patches = train_labels.shape[0]
-
-        print("Data directory:", opts.train_data_dir)
-        print("Number of patches:", opts.num_train_patches)
-        print("Ratio of road patches: {:.3f}".format(train_labels.mean()))
-
-        self.train_images = train_images
-
-        return train_data, train_labels
-
-    def train(self):
-        """Train the model for one epoch."""
-        opts = self._options
-
-        indices = np.arange(0, opts.num_train_patches)
+        indices = np.arange(0, num_train_patches)
         np.random.shuffle(indices)
 
         num_errors = 0
         total = 0
 
-        for batch_i, offset in enumerate(range(0, opts.num_train_patches - opts.batch_size, opts.batch_size)):
+        for batch_i, offset in enumerate(range(0, num_train_patches - opts.batch_size, opts.batch_size)):
             batch_indices = indices[offset:offset + opts.batch_size]
             feed_dict = {
-                self._patches_node: self.patches[batch_indices, :, :, :],
-                self._labels_node: self.labels[batch_indices]
+                self._patches_node: patches[batch_indices, :, :, :],
+                self._labels_node: labels_flat[batch_indices]
             }
 
-            summary_str, _, l, lr, predictions, predictions, step = self._session.run(
-                [self.summary_op, self._train, self._loss, self._lr, self._predict_logits, self._predictions,
+            summary_str, _, l, predictions, predictions, step = self._session.run(
+                [self.summary_op, self._train, self._loss, self._predict_logits, self._predictions,
                  self._global_step],
                 feed_dict=feed_dict)
 
             print("Batch {}\tStep {}".format(batch_i, step), end="\r")
             self.summary_writer.add_summary(summary_str, global_step=step)
 
-            num_errors += np.abs(self.labels[batch_indices] - predictions).sum()
+            num_errors += np.abs(labels_flat[batch_indices] - predictions).sum()
             total += opts.batch_size
 
             # from time to time do full prediction on some images
             if step > 0 and step % opts.eval_every == 0:
                 print()
-                images_to_predict = self.train_images[:opts.num_eval_images, :, :, :]
+                images_to_predict = imgs[:opts.num_eval_images, :, :, :]
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
 
@@ -395,11 +365,14 @@ def main(_):
             print("Restore date: {}".format(opts.restore_date))
             model.restore(date=opts.restore_date)
 
-        for i in range(opts.num_epoch):
-            print("==== Train epoch: {} ====".format(i))
-            tf.local_variables_initializer().run()  # Reset scores
-            model.train()  # Process one epoch
-            model.save(i)  # Save model to disk
+        if opts.num_epoch > 0:
+            train_images, train_labels = images.load_train_data(opts.train_data_dir, IMG_PATCH_SIZE)
+
+            for i in range(opts.num_epoch):
+                print("==== Train epoch: {} ====".format(i))
+                tf.local_variables_initializer().run()  # Reset scores
+                model.train(train_images, train_labels)  # Process one epoch
+                model.save(i)  # Save model to disk
 
         if opts.eval_data_dir:
             print("Running inference on eval data {}".format(opts.eval_data_dir))
