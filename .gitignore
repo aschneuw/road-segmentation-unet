@@ -105,3 +105,8 @@ ENV/
 
 # mkdocs documentation
 /site
+
+*.aux
+*.log
+*.out
+*.synctex.gz
