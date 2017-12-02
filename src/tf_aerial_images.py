@@ -252,7 +252,7 @@ class ConvolutionalModel:
                  self._global_step],
                 feed_dict=feed_dict)
 
-            print("Batch {}\tStep {}".format(batch_i, step), end="\r")
+            print("Batch {} Step {}".format(batch_i, step), end="\r")
             self.summary_writer.add_summary(summary_str, global_step=step)
 
             num_errors += np.abs(labels_flat[batch_indices] - predictions).sum()
