@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE
+from constants import NUM_CHANNELS, IMG_PATCH_SIZE
 from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
@@ -28,6 +28,8 @@ tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
 tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
 tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
+tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
+tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -51,13 +53,15 @@ class Options(object):
         self.lambda_reg = FLAGS.lambda_reg
         self.num_eval_images = FLAGS.num_eval_images
         self.interactive = FLAGS.interactive
+        self.patch_size = FLAGS.patch_size
+        self.gpu = FLAGS.gpu
 
 
 class ConvolutionalModel:
     """Two layers patch convolution model (baseline)"""
 
     def __init__(self, options, session):
-        self._options: Options = options
+        self._options = options
         self._session = session
 
         np.random.seed(options.seed)
@@ -77,8 +81,7 @@ class ConvolutionalModel:
         # recenter in [-.5, .5]
         data = patches - 0.5
 
-
-    def make_unet(self, X, training):
+    def make_unet(self, X, training=False):
         """Build a U-Net architecture
         Args:
             X (4-D Tensor): (N, H, W, C)
@@ -115,14 +118,13 @@ class ConvolutionalModel:
         return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
 
     def cross_entropy_loss(self, labels, pred_logits):
-        opts = self._options
+        batch_size, patch_height, patch_width = labels.shape
 
-        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=pred_logits, labels=labels)
+        cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=tf.reshape(pred_logits, (batch_size * patch_height * patch_width, 2)),
+            labels=tf.reshape(labels, (batch_size * patch_height * patch_width,)))
         loss = tf.reduce_mean(cross_entropy)
 
-        # Add the regularization term to the loss.
-        regularizers = tf.add_n([tf.nn.l2_loss(w) for w in self._regularized_weights])
-        loss += opts.lambda_reg * regularizers
         return loss
 
     def optimize(self, loss):
@@ -149,12 +151,12 @@ class ConvolutionalModel:
 
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
-                                      shape=(opts.batch_size, IMG_PATCH_SIZE, IMG_PATCH_SIZE, NUM_CHANNELS))
+                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size, NUM_CHANNELS))
         labels_node = tf.placeholder(tf.int64,
-                                     shape=(opts.batch_size,))
+                                     shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
-        predict_logits = self.forward(patches_node)
-        predictions = tf.argmax(predict_logits, axis=1)
+        predict_logits = self.make_unet(patches_node)
+        predictions = tf.argmax(predict_logits, axis=3)
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
         self.add_metrics_summary(labels_node, predictions)
@@ -182,9 +184,11 @@ class ConvolutionalModel:
 
     def add_metrics_summary(self, labels, predictions):
         """add accuracy, precision, recall, f1_score to tensorboard"""
-        accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
-        recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
-        precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
+        flat_labels = tf.layers.flatten(labels)
+        flat_predictions = tf.layers.flatten(predictions)
+        accuracy = tf.metrics.accuracy(labels=flat_labels, predictions=flat_predictions)[1]
+        recall = tf.metrics.recall(labels=flat_labels, predictions=flat_predictions)[1]
+        precision = tf.metrics.precision(labels=flat_labels, predictions=flat_predictions)[1]
         f1_score = 2 / (1 / recall + 1 / precision)
 
         self.summary_ops.append(tf.summary.scalar("accuracy", accuracy))
@@ -201,8 +205,10 @@ class ConvolutionalModel:
         """
         opts = self._options
 
-        patches = images.extract_patches(imgs, IMG_PATCH_SIZE)
-        labels_flat = labels.ravel()
+        patches = images.extract_patches(imgs, opts.patch_size)
+        labels_patches = images.extract_patches(labels, opts.patch_size)
+        labels_patches = (labels_patches >= 0.5) * 1.
+
         num_train_patches = patches.shape[0]
 
         indices = np.arange(0, num_train_patches)
@@ -215,7 +221,7 @@ class ConvolutionalModel:
             batch_indices = indices[offset:offset + opts.batch_size]
             feed_dict = {
                 self._patches_node: patches[batch_indices, :, :, :],
-                self._labels_node: labels_flat[batch_indices]
+                self._labels_node: labels_patches[batch_indices]
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
@@ -226,7 +232,7 @@ class ConvolutionalModel:
             print("Batch {} Step {}".format(batch_i, step), end="\r")
             self.summary_writer.add_summary(summary_str, global_step=step)
 
-            num_errors += np.abs(labels_flat[batch_indices] - predictions).sum()
+            num_errors += np.abs(labels_patches[batch_indices] - predictions).sum()
             total += opts.batch_size
 
             # from time to time do full prediction on some images
@@ -259,18 +265,18 @@ class ConvolutionalModel:
         num_images = imgs.shape[0]
         print("Running prediction on {} images... ".format(num_images), end="")
 
-        patches = images.extract_patches(imgs, IMG_PATCH_SIZE)
+        patches = images.extract_patches(imgs, opts.patch_size)
         num_patches = patches.shape[0]
         num_channel = imgs.shape[3]
 
         # patches padding to have full batches
         if num_patches % opts.batch_size != 0:
             num_extra_patches = opts.batch_size - (num_patches % opts.batch_size)
-            extra_patches = np.zeros((num_extra_patches, IMG_PATCH_SIZE, IMG_PATCH_SIZE, num_channel))
+            extra_patches = np.zeros((num_extra_patches, opts.patch_size, opts.patch_size, num_channel))
             patches = np.concatenate([patches, extra_patches], axis=0)
 
         num_batches = int(patches.shape[0] / opts.batch_size)
-        eval_predictions = np.ndarray(shape=(patches.shape[0],))
+        eval_predictions = np.ndarray(shape=(patches.shape[0], opts.patch_size, opts.patch_size))
 
         for batch in range(num_batches):
             offset = batch * opts.batch_size
@@ -278,23 +284,22 @@ class ConvolutionalModel:
             feed_dict = {
                 self._patches_node: patches[offset:offset + opts.batch_size, :, :, :],
             }
-            eval_predictions[offset:offset + opts.batch_size] = self._session.run(self._predictions, feed_dict)
+            eval_predictions[offset:offset + opts.batch_size, :, :] = self._session.run(self._predictions, feed_dict)
 
         # remove padding
         eval_predictions = eval_predictions[0:num_patches]
         patches_per_image = int(num_patches / num_images)
 
         # construct masks
-        mask_patches = images.predictions_to_patches(eval_predictions, IMG_PATCH_SIZE)
-        new_size = (num_images, patches_per_image, IMG_PATCH_SIZE, IMG_PATCH_SIZE, 1)
-        mask_patches = np.resize(mask_patches, new_size)
-        masks = images.images_from_patches(mask_patches)
+        new_shape = (num_images, patches_per_image, opts.patch_size, opts.patch_size, 1)
+        masks = images.images_from_patches(eval_predictions.reshape(new_shape))
         print("Done")
         return masks
 
     def save(self, epoch=0):
         opts = self._options
-        model_data_dir = os.path.abspath(os.path.join(opts.save_path, self.experiment_name, 'model-epoch-{:03d}.chkpt'.format(epoch)))
+        model_data_dir = os.path.abspath(
+            os.path.join(opts.save_path, self.experiment_name, 'model-epoch-{:03d}.chkpt'.format(epoch)))
         saved_path = self.saver.save(self._session, model_data_dir)
         # create checkpoint
         print("Model saved in file: {}".format(saved_path))
@@ -329,7 +334,9 @@ def main(_):
     opts = Options()
 
     with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
-        with tf.device("/gpu:0"):
+        device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
+        print("Running on device {}".format(device))
+        with tf.device(device):
             model = ConvolutionalModel(opts, session)
 
         if opts.restore_model:
@@ -337,12 +344,12 @@ def main(_):
             model.restore(date=opts.restore_date)
 
         if opts.num_epoch > 0:
-            train_images, train_labels = images.load_train_data(opts.train_data_dir, IMG_PATCH_SIZE)
+            train_images, train_groundtruth = images.load_train_data(opts.train_data_dir, opts.patch_size)
 
             for i in range(opts.num_epoch):
                 print("==== Train epoch: {} ====".format(i))
                 tf.local_variables_initializer().run()  # Reset scores
-                model.train(train_images, train_labels)  # Process one epoch
+                model.train(train_images, train_groundtruth)  # Process one epoch
                 model.save(i)  # Save model to disk
 
         if opts.eval_data_dir:

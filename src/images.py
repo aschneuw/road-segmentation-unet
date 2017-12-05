@@ -3,6 +3,7 @@ import os
 
 import matplotlib.image as mpimg
 import numpy as np
+from PIL import Image
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
@@ -73,10 +74,10 @@ def labels_for_patches(patches):
     return foreground.astype(np.int64)
 
 
-def overlays(images, masks, fade=0.2):
+def overlays(imgs, masks, fade=0.2):
     """Add the masks on top of the images with red transparency
 
-    images:
+    imgs:
         array of images
         shape: [num_images, im_height, im_width, num_channel]
 
@@ -87,16 +88,22 @@ def overlays(images, masks, fade=0.2):
     returns:
         [num_images, im_height, im_width, num_channel]
     """
-    num_images, im_height, im_width, num_channel = images.shape
-    color_masks = np.zeros((num_images, im_width, im_height, num_channel), dtype=np.uint8)
-    color_masks[:, :, :, 0] = masks[:, :, :, 0] * PIXEL_DEPTH
-    if num_channel == 4:
-        color_masks[:, :, :, 3] = masks[:, :, :, 0] * PIXEL_DEPTH
+    num_images, im_height, im_width, num_channel = imgs.shape
+    assert num_channel == 3, 'Predict image should be colored'
 
-    images = (1 - fade) * images + fade * color_masks
-    images = img_float_to_uint8(images)
+    imgs = img_float_to_uint8(imgs)
+    masks = img_float_to_uint8(masks.squeeze())
+    masks_red = np.zeros((num_images, im_height, im_width, 4), dtype=np.uint8)
+    masks_red[:, :, :, 0] = masks
+    masks_red[:, :, :, 3] = masks * fade
 
-    return images
+    results = np.zeros((num_images, im_width, im_height, 4), dtype=np.uint8)
+    for i in range(num_images):
+        x = Image.fromarray(imgs[i]).convert('RGBA')
+        y = Image.fromarray(masks_red[i])
+        results[i] = np.array(Image.alpha_composite(x, y))
+
+    return results
 
 
 def images_from_patches(patches):
@@ -198,7 +205,7 @@ def load_train_data(directory, patch_size):
 
     returns:
         images: [num_images, img_height, img_width, num_channel]
-        labels: [num_images, num_patches_side, num_patches_side]
+        labels: [num_images, img_height, img_width]
     """
     train_data_dir = os.path.abspath(os.path.join(directory, 'images/'))
     train_labels_dir = os.path.abspath(os.path.join(directory, 'groundtruth/'))
@@ -206,11 +213,7 @@ def load_train_data(directory, patch_size):
     train_images = load(train_data_dir)
 
     num_images, img_height, img_width, num_channel = train_images.shape
-    num_patches_side = int(img_height / patch_size)
 
     train_groundtruth = load(train_labels_dir)
-    train_groundtruth_patches = extract_patches(train_groundtruth, patch_size)
-    train_labels = labels_for_patches(train_groundtruth_patches)
-    train_labels = train_labels.reshape((num_images, num_patches_side, num_patches_side))
 
-    return train_images, train_labels
+    return train_images, train_groundtruth
