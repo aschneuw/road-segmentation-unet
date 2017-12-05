@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-tensorboard --logdir=../runs
+tensorboard --logdir=../log_dir
