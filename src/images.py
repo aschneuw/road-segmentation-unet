@@ -23,7 +23,7 @@ def load(directory):
     return np.asarray(images)
 
 
-def extract_patches(images, patch_size):
+def extract_patches(images, patch_size, stride=None):
     """extract square patches from a batch of images
 
     images:
@@ -36,11 +36,24 @@ def extract_patches(images, patch_size):
         4D input: [num_patches, patch_size, patch_size, num_channel]
         3D input: [num_patches, patch_size, patch_size]
     """
+
+    # stride = 16
+    # patch_size = 128
+    if not stride:
+        stride = patch_size
+
     has_channels = (len(images.shape) == 4)
+
     if not has_channels:
         images = np.expand_dims(images, -1)
 
+
+
     num_images, image_height, image_width, num_channel = images.shape
+
+    n_patches = (image_width - patch_size/stride) + 1
+    
+
     assert image_height % patch_size == 0 and image_width % patch_size == 0
     num_patches = num_images * int(image_height / patch_size) * int(image_width / patch_size)
 
@@ -57,7 +70,6 @@ def extract_patches(images, patch_size):
         patches = np.squeeze(patches, -1)
 
     return patches
-
 
 def labels_for_patches(patches):
     """Compute the label for a some patches
@@ -99,7 +111,7 @@ def overlays(images, masks, fade=0.2):
     return images
 
 
-def images_from_patches(patches):
+def images_from_patches(patches, stride=None):
     """Transform a list of patches into images
 
     patches:
@@ -109,7 +121,12 @@ def images_from_patches(patches):
     returns:
         num_images square images from 2D concat patches
     """
+
     num_images, num_patches, patch_size, _, num_channel = patches.shape
+
+    if stride is None:
+        stride = patch_size
+
     num_patches_side = int(np.sqrt(num_patches))
     assert np.sqrt(num_patches) == num_patches_side, "Square image assumption broken"
     image_size = num_patches_side * patch_size
