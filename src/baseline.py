@@ -8,7 +8,6 @@ import tensorflow as tf
 
 import images
 from constants import NUM_CHANNELS, NUM_LABELS, IMG_PATCH_SIZE
-from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write checkpoints, overlays and submissions")
@@ -77,42 +76,72 @@ class ConvolutionalModel:
         # recenter in [-.5, .5]
         data = patches - 0.5
 
+        with tf.variable_scope('conv1'):
+            conv1_weights = tf.Variable(
+                tf.truncated_normal([5, 5, NUM_CHANNELS, 32],  # 5x5 filter, depth 32.
+                                    stddev=0.1,
+                                    seed=opts.seed), name='weight')
 
-    def make_unet(self, X, training):
-        """Build a U-Net architecture
-        Args:
-            X (4-D Tensor): (N, H, W, C)
-            training (1-D Tensor): Boolean Tensor is required for batchnormalization layers
-        Returns:
-            output (4-D Tensor): (N, H, W, 2)
+            conv = tf.nn.conv2d(data,
+                                conv1_weights,
+                                strides=[1, 1, 1, 1],
+                                padding='SAME',
+                                name='conv')
 
-        Notes:
-            U-Net: Convolutional Networks for Biomedical Image Segmentation
-            https://arxiv.org/abs/1505.04597
-        Source:
-            https://github.com/kkweon/UNet-in-Tensorflow/blob/master/train.py
-        """
-        net = X - 0.5  # TODO check
-        net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
-        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1")
-        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2")
-        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3")
-        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4")
-        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False)
+            conv1_biases = tf.Variable(tf.zeros([32]), name='bias')
 
-        up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False)
+            relu = tf.nn.relu(tf.nn.bias_add(conv, conv1_biases), name='relu')
 
-        up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False)
+            pool = tf.nn.max_pool(relu,
+                                  ksize=[1, 2, 2, 1],
+                                  strides=[1, 2, 2, 1],
+                                  padding='SAME',
+                                  name='pooling')
 
-        up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False)
+        with tf.variable_scope('conv2'):
+            conv2_weights = tf.Variable(
+                tf.truncated_normal([5, 5, 32, 64],
+                                    stddev=0.1,
+                                    seed=opts.seed), name='weight')
+            conv2_biases = tf.Variable(tf.constant(0.1, shape=[64]), name='bias')
 
-        up9 = upsample_concat(conv8, conv1, name="9")
-        conv9 = conv_conv_pool(up9, [8, 8], training, name="9", pool=False)
+            conv2 = tf.nn.conv2d(pool,
+                                 conv2_weights,
+                                 strides=[1, 1, 1, 1],
+                                 padding='SAME',
+                                 name='conv')
 
-        return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
+            relu2 = tf.nn.relu(tf.nn.bias_add(conv2, conv2_biases), name='relu')
+
+            pool2 = tf.nn.max_pool(relu2,
+                                   ksize=[1, 2, 2, 1],
+                                   strides=[1, 2, 2, 1],
+                                   padding='SAME',
+                                   name='pooling')
+
+        # reshape the pooled layers
+        reshape = tf.reshape(pool2, [pool2.shape[0], -1])
+
+        with tf.variable_scope('fc1'):
+            fc1_weights = tf.Variable(  # fully connected, depth 512.
+                tf.truncated_normal([int(IMG_PATCH_SIZE / 4 * IMG_PATCH_SIZE / 4 * 64), 512],
+                                    stddev=0.1,
+                                    seed=opts.seed), name='weight')
+            fc1_biases = tf.Variable(tf.constant(0.1, shape=[512]), name='bias')
+
+            hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases, name='relu')
+
+        with tf.variable_scope('fc2'):
+            fc2_weights = tf.Variable(
+                tf.truncated_normal([512, NUM_LABELS],
+                                    stddev=0.1,
+                                    seed=opts.seed), name='weight')
+            fc2_biases = tf.Variable(tf.constant(0.1, shape=[NUM_LABELS]), name='bias')
+            out = tf.matmul(hidden, fc2_weights) + fc2_biases
+
+        self._regularized_weights = [fc1_weights, fc1_biases, fc2_weights, fc2_biases]
+
+        return out
 
     def cross_entropy_loss(self, labels, pred_logits):
         opts = self._options
