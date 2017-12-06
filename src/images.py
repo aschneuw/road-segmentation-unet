@@ -49,21 +49,23 @@ def extract_patches(images, patch_size, stride=None):
         images = np.expand_dims(images, -1)
 
 
-
     num_images, image_height, image_width, num_channel = images.shape
+    assert image_height == image_width
 
-    n_patches = (image_width - patch_size/stride) + 1
-    
+    border_margin = int((patch_size - stride) / 2)
+    assert border_margin % 1 == 0
 
-    assert image_height % patch_size == 0 and image_width % patch_size == 0
-    num_patches = num_images * int(image_height / patch_size) * int(image_width / patch_size)
+    num_patches_image = int(((image_width - border_margin*2) / stride))**2
+    assert num_patches_image % 1 == 0
 
-    patches = np.zeros((num_patches, patch_size, patch_size, num_channel))
+    num_total_patches = images.shape[0] * num_patches_image
+
+    patches = np.zeros((num_total_patches, patch_size, patch_size, num_channel))
 
     patch_idx = 0
     for n in range(0, num_images):
-        for x in range(0, image_width, patch_size):
-            for y in range(0, image_height, patch_size):
+        for x in range(0, image_width - patch_size, stride):
+            for y in range(0, image_height - patch_size, stride):
                 patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size, :]
                 patch_idx += 1
 
