@@ -39,8 +39,6 @@ def extract_patches(images, patch_size, stride=None):
         3D input: [num_patches, patch_size, patch_size]
     """
 
-    # stride = 16
-    # patch_size = 128
     if not stride:
         stride = patch_size
 
@@ -48,7 +46,6 @@ def extract_patches(images, patch_size, stride=None):
 
     if not has_channels:
         images = np.expand_dims(images, -1)
-
 
     num_images, image_height, image_width, num_channel = images.shape
     assert image_height == image_width
@@ -65,9 +62,9 @@ def extract_patches(images, patch_size, stride=None):
 
     patch_idx = 0
     for n in range(0, num_images):
-        for x in range(0, image_width - patch_size, stride):
-            for y in range(0, image_height - patch_size, stride):
-                patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size, :]
+        for x in range(0, image_width - patch_size + 1, stride):
+            for y in range(0, image_height - patch_size + 1, stride):
+                patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size,:]
                 patch_idx += 1
 
     if not has_channels:
@@ -162,6 +159,7 @@ def images_from_patches(patches, stride=None, border_majority_only=True, normali
                 count[n, y_start:y_stop, x_start:x_stop, :] += 1
                 sum_[n, y_start:y_stop, x_start:x_stop, :] += patches[n, patch_idx]
                 patch_idx += 1
+
     if normalize:
         images = sum_ / count
     else:
@@ -176,7 +174,7 @@ def images_from_patches(patches, stride=None, border_majority_only=True, normali
                 for y in range(border_margin_os, image_size - border_margin_os, stride):
                     y_start = y
                     y_stop = y + stride
-                    images[n,y_start:y_stop, x_start:x_stop, :] = patches[n, patch_idx, border_margin_os:-border_margin_os, border_margin_os:-border_margin_os]
+                    images[n,y_start:y_stop, x_start:x_stop, :] = patches[n, patch_idx, border_margin_os:patch_size-border_margin_os, border_margin_os:patch_size-border_margin_os]
                     patch_idx += 1
 
     return images
