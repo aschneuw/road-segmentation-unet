@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, IMG_PATCH_SIZE
+from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
 from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
@@ -30,6 +30,7 @@ tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluati
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
 tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
 tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
+tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -54,6 +55,7 @@ class Options(object):
         self.num_eval_images = FLAGS.num_eval_images
         self.interactive = FLAGS.interactive
         self.patch_size = FLAGS.patch_size
+        self.stride = FLAGS.stride
         self.gpu = FLAGS.gpu
 
 
@@ -156,7 +158,8 @@ class ConvolutionalModel:
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
         predict_logits = self.make_unet(patches_node)
-        predictions = tf.argmax(predict_logits, axis=3)
+        predictions = tf.nn.softmax(predict_logits, dim=3)
+        predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
         self.add_metrics_summary(labels_node, predictions)
@@ -205,8 +208,8 @@ class ConvolutionalModel:
         """
         opts = self._options
 
-        patches = images.extract_patches(imgs, opts.patch_size)
-        labels_patches = images.extract_patches(labels, opts.patch_size)
+        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride)
+        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride)
         labels_patches = (labels_patches >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
@@ -265,7 +268,7 @@ class ConvolutionalModel:
         num_images = imgs.shape[0]
         print("Running prediction on {} images... ".format(num_images), end="")
 
-        patches = images.extract_patches(imgs, opts.patch_size)
+        patches = images.extract_patches(imgs, opts.patch_size, opts.stride)
         num_patches = patches.shape[0]
         num_channel = imgs.shape[3]
 
@@ -292,7 +295,7 @@ class ConvolutionalModel:
 
         # construct masks
         new_shape = (num_images, patches_per_image, opts.patch_size, opts.patch_size, 1)
-        masks = images.images_from_patches(eval_predictions.reshape(new_shape))
+        masks = images.images_from_patches(eval_predictions.reshape(new_shape), stride=opts.stride)
         print("Done")
         return masks
 
@@ -356,10 +359,11 @@ def main(_):
             print("Running inference on eval data {}".format(opts.eval_data_dir))
             eval_images = images.load(opts.eval_data_dir)
             masks = model.predict(eval_images)
+            masks = images.quantize_mask(masks, patch_size=IMG_PATCH_SIZE, threshold=FOREGROUND_THRESHOLD)
             overlays = images.overlays(eval_images, masks)
             save_dir = os.path.abspath(os.path.join(opts.save_path, model.experiment_name))
             images.save_all(overlays, save_dir)
-            images.save_submission_csv(masks, os.path.join(save_dir, "submission.csv"), IMG_PATCH_SIZE)
+            images.save_submission_csv(masks, save_dir, IMG_PATCH_SIZE)
 
         if opts.interactive:
             code.interact(local=locals())
