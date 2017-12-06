@@ -5,6 +5,7 @@ import numpy as np
 import images
 from constants import PIXEL_DEPTH
 
+import matplotlib.pyplot as plt
 
 class TestStridePatchGeneration(TestCase):
     def test_608_608_image_to_patches_stride(self):
@@ -13,13 +14,16 @@ class TestStridePatchGeneration(TestCase):
         IMAGE_WIDTH = IMAGE_HEIGHT = 608
         PATCH_SIZE = 128
         STRIDE = 16
+        N_PATCHES = 10*31*31
 
         random_rgb_image = np.random.randint(0, PIXEL_DEPTH, size=(N_IMAGES, IMAGE_HEIGHT, IMAGE_WIDTH, N_CHANNEL))
         patches = images.extract_patches(random_rgb_image, PATCH_SIZE, STRIDE)
+        patches = patches.reshape((N_IMAGES, int(N_PATCHES / N_IMAGES) ,PATCH_SIZE, PATCH_SIZE, N_CHANNEL))
 
-        n_patches, p_height, p_width, channels = patches.shape
+        n_images, n_patches, p_height, p_width, channels = patches.shape
 
-        assert n_patches == 10*31*31
+        assert n_images == 10
+        assert n_patches == 31*31
         assert p_height == 128
         assert p_width == 128
         assert channels == 3
@@ -46,13 +50,48 @@ class TestStridePatchGeneration(TestCase):
         IMAGE_WIDTH = IMAGE_HEIGHT = 608
         PATCH_SIZE = 128
         STRIDE = 16
+        N_PATCHES = 10 * 31 * 31
 
         random_rgb_image = np.random.randint(0, PIXEL_DEPTH, size=(N_IMAGES, IMAGE_HEIGHT, IMAGE_WIDTH, N_CHANNEL))
         patches = images.extract_patches(random_rgb_image, PATCH_SIZE, STRIDE)
 
+        patches = patches.reshape((N_IMAGES, int(N_PATCHES / N_IMAGES), PATCH_SIZE, PATCH_SIZE, N_CHANNEL))
 
+        reconstructed_images = images.images_from_patches(patches, stride=STRIDE)
 
+        num_images, image_height, image_width, n_channel = reconstructed_images.shape
 
+        self.assertTrue(num_images == N_IMAGES)
+        self.assertTrue(image_height == IMAGE_HEIGHT)
+        self.assertTrue(image_width == IMAGE_WIDTH)
+        self.assertTrue(n_channel == N_CHANNEL)
+
+    def test_608_608_patches_to_image_stride_cummulative(self):
+        N_IMAGES = 10
+        N_CHANNEL = 3
+        IMAGE_WIDTH = IMAGE_HEIGHT = 608
+        PATCH_SIZE = 128
+        STRIDE = 16
+        N_PATCHES = 10 * 31 * 31
+
+        random_rgb_image = np.ones((N_IMAGES, IMAGE_HEIGHT, IMAGE_WIDTH, N_CHANNEL))
+        patches = images.extract_patches(random_rgb_image, PATCH_SIZE, STRIDE)
+
+        patches = patches.reshape((N_IMAGES, int(N_PATCHES / N_IMAGES), PATCH_SIZE, PATCH_SIZE, N_CHANNEL))
+
+        reconstructed_images = images.images_from_patches(patches, stride=STRIDE, normalize=False)
+
+        num_images, image_height, image_width, n_channel = reconstructed_images.shape
+
+        self.assertTrue(num_images == N_IMAGES)
+        self.assertTrue(image_height == IMAGE_HEIGHT)
+        self.assertTrue(image_width == IMAGE_WIDTH)
+        self.assertTrue(n_channel == N_CHANNEL)
+
+        reconstructed_images
+        plt.imsave("bla.png", reconstructed_images[0])
+
+        print(reconstructed_images[0,50,100,0])
 
 
 class TestImages(TestCase):

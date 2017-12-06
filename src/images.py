@@ -4,6 +4,7 @@ import os
 import matplotlib.image as mpimg
 import numpy as np
 from PIL import Image
+from scipy.stats import mode
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
@@ -120,7 +121,7 @@ def overlays(imgs, masks, fade=0.2):
     return results
 
 
-def images_from_patches(patches, stride=None):
+def images_from_patches(patches, stride=None, border_majority_only=True, normalize=True):
     """Transform a list of patches into images
 
     patches:
@@ -136,21 +137,49 @@ def images_from_patches(patches, stride=None):
     if stride is None:
         stride = patch_size
 
-    num_patches_side = int(np.sqrt(num_patches))
-    assert np.sqrt(num_patches) == num_patches_side, "Square image assumption broken"
-    image_size = num_patches_side * patch_size
 
-    images = np.ndarray(shape=(num_images, image_size, image_size, num_channel), dtype=patches.dtype)
+    num_patches_side = int(np.sqrt(num_patches))
+
+    border_margin = patch_size - stride
+    border_margin_os = int(border_margin / 2)
+
+    total_stride_length = num_patches_side * stride
+    image_size = total_stride_length + border_margin
+
+    assert np.sqrt(num_patches) == (image_size - border_margin) / stride, "Square image assumption broken"
+
+    count = np.zeros(shape=(num_images, image_size, image_size, num_channel))
+    sum_ = np.zeros(shape=(num_images, image_size, image_size, num_channel))
 
     for n in range(0, num_images):
         patch_idx = 0
-        for x in range(0, image_size, patch_size):
-            for y in range(0, image_size, patch_size):
-                images[n, y:y + patch_size, x:x + patch_size] = patches[n, patch_idx]
+        for x in range(0, image_size - border_margin, stride):
+            x_start = x
+            x_stop = x + patch_size
+            for y in range(0, image_size - border_margin, stride):
+                y_start = y
+                y_stop = y + patch_size
+                count[n, y_start:y_stop, x_start:x_stop, :] += 1
+                sum_[n, y_start:y_stop, x_start:x_stop, :] += patches[n, patch_idx]
                 patch_idx += 1
+    if normalize:
+        images = sum_ / count
+    else:
+        images = sum_
+
+    if border_majority_only:
+        for n in range(0, num_images):
+            patch_idx = 0
+            for x in range(border_margin_os, image_size - border_margin_os, stride):
+                x_start = x
+                x_stop = x + stride
+                for y in range(border_margin_os, image_size - border_margin_os, stride):
+                    y_start = y
+                    y_stop = y + stride
+                    images[n,y_start:y_stop, x_start:x_stop, :] = patches[n, patch_idx, border_margin_os:-border_margin_os, border_margin_os:-border_margin_os]
+                    patch_idx += 1
 
     return images
-
 
 def predictions_to_patches(predictions, patch_size):
     """Expand each prediction to a square patch
