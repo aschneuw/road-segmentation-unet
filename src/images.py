@@ -24,7 +24,7 @@ def load(directory):
     return np.asarray(images)
 
 
-def extract_patches(images, patch_size, stride=None):
+def extract_patches(images, patch_size, stride=None, augmented=False):
     """extract square patches from a batch of images
 
     images:
@@ -37,6 +37,18 @@ def extract_patches(images, patch_size, stride=None):
         4D input: [num_patches, patch_size, patch_size, num_channel]
         3D input: [num_patches, patch_size, patch_size]
     """
+    if augmented:
+        print("Start image augmentation: {} initial images".format(images.shape[0]))
+        rotations = []
+        for k in range(0, 4):
+            rotations.append(np.rot90(images, k, axes=(1, 2)))
+        images = np.concatenate(rotations, axis=0)
+        print("After 90 degree rotations: {} images".format(images.shape[0]))
+
+        flips = [images, np.fliplr(images), np.flipud(images)]
+        images = np.concatenate(flips, axis=0)
+        print("After ud lr flips: {} images".format(images.shape[0]))
+
     if not stride:
         stride = patch_size
 

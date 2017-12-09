@@ -31,6 +31,7 @@ tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict f
 tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
 tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
+tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -57,6 +58,7 @@ class Options(object):
         self.patch_size = FLAGS.patch_size
         self.stride = FLAGS.stride
         self.gpu = FLAGS.gpu
+        self.image_augmentation = FLAGS.image_augmentation
 
 
 class ConvolutionalModel:
@@ -208,8 +210,8 @@ class ConvolutionalModel:
         """
         opts = self._options
 
-        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride)
-        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride)
+        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
+        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
         labels_patches = (labels_patches >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
