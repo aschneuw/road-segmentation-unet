@@ -27,13 +27,11 @@ def load(directory):
 
 def extract_patches(images, patch_size, stride=None, augmented=False):
     """extract square patches from a batch of images
-
     images:
         4D [num_images, image_height, image_width, num_channel]
         or 3D [num_images, image_height, image_width]
     patch_size:
         should divide the image width and height
-
     returns:
         4D input: [num_patches, patch_size, patch_size, num_channel]
         3D input: [num_patches, patch_size, patch_size]
@@ -54,7 +52,6 @@ def extract_patches(images, patch_size, stride=None, augmented=False):
         stride = patch_size
 
     has_channels = (len(images.shape) == 4)
-
     if not has_channels:
         images = np.expand_dims(images, -1)
 
@@ -65,12 +62,7 @@ def extract_patches(images, patch_size, stride=None, augmented=False):
     patches_per_side = int((image_height - patch_size) / stride) + 1
     num_patches = num_images * patches_per_side * patches_per_side
 
-    num_patches_image = int(((image_width - border_margin*2) / stride))**2
-    assert num_patches_image % 1 == 0
-
-    num_total_patches = images.shape[0] * num_patches_image
-
-    patches = np.zeros((num_total_patches, patch_size, patch_size, num_channel))
+    patches = np.zeros((num_patches, patch_size, patch_size, num_channel))
 
     patch_idx = 0
     for n in range(0, num_images):
