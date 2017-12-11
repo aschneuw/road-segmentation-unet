@@ -1,20 +1,21 @@
 import tensorflow as tf
 
 
-def conv_conv_pool(input_, n_filters, training, name, pool=True, activation=tf.nn.relu):
+def conv_conv_pool(input_, n_filters, training, name, dropout_keep=None, pool=True, activation=tf.nn.relu):
     """{Conv -> BN -> RELU}x2 -> {Pool, optional}
     Args:
         input_ (4-D Tensor): (batch_size, H, W, C)
         n_filters (list): number of filters [int, int]
         training (1-D Tensor): Boolean Tensor
         name (str): name postfix
+        dropout_keep (var):
         pool (bool): If True, MaxPool2D
         activation: Activaion functions
     Returns:
         net: output of the Convolution operations
         pool (optional): output of the max pooling operations
     """
-    net = input_
+    net = tf.nn.dropout(input_, dropout_keep) if dropout_keep is not None else input_
 
     with tf.variable_scope("conv{}".format(name)):
         for i, F in enumerate(n_filters):

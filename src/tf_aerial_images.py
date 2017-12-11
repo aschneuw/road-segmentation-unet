@@ -32,6 +32,7 @@ tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
 tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
+tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -59,6 +60,7 @@ class Options(object):
         self.stride = FLAGS.stride
         self.gpu = FLAGS.gpu
         self.image_augmentation = FLAGS.image_augmentation
+        self.dropout = FLAGS.dropout
 
 
 class ConvolutionalModel:
@@ -85,7 +87,7 @@ class ConvolutionalModel:
         # recenter in [-.5, .5]
         data = patches - 0.5
 
-    def make_unet(self, X, training=False):
+    def make_unet(self, X):
         """Build a U-Net architecture
         Args:
             X (4-D Tensor): (N, H, W, C)
@@ -101,23 +103,30 @@ class ConvolutionalModel:
         """
         net = X - 0.5  # TODO check
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
-        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1")
-        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2")
-        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3")
-        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4")
-        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False)
+
+        dropout_keep = tf.placeholder_with_default(1.0, shape=())
+        training = tf.placeholder_with_default(False, shape=())
+
+        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1", dropout_keep=dropout_keep)
+        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2", dropout_keep=dropout_keep)
+        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3", dropout_keep=dropout_keep)
+        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4", dropout_keep=dropout_keep)
+        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False, dropout_keep=dropout_keep)
 
         up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False)
+        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False, dropout_keep=dropout_keep)
 
         up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False)
+        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False, dropout_keep=dropout_keep)
 
         up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False)
+        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False, dropout_keep=dropout_keep)
 
         up9 = upsample_concat(conv8, conv1, name="9")
         conv9 = conv_conv_pool(up9, [8, 8], training, name="9", pool=False)
+
+        self._dropout_keep = dropout_keep
+        self._training = training
 
         return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
 
@@ -226,7 +235,9 @@ class ConvolutionalModel:
             batch_indices = indices[offset:offset + opts.batch_size]
             feed_dict = {
                 self._patches_node: patches[batch_indices, :, :, :],
-                self._labels_node: labels_patches[batch_indices]
+                self._labels_node: labels_patches[batch_indices],
+                self._dropout_keep: opts.dropout,
+                self._training: False,  # TODO
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
@@ -337,8 +348,12 @@ class ConvolutionalModel:
 
 def main(_):
     opts = Options()
+    if opts.gpu == -1:
+        config = tf.ConfigProto()
+    else:
+        config = tf.ConfigProto(device_count={'GPU': opts.gpu}, allow_soft_placement=True)
 
-    with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
+    with tf.Graph().as_default(), tf.Session(config=config) as session:
         device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
         print("Running on device {}".format(device))
         with tf.device(device):
