@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, IMG_PATCH_SIZE
+from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
 from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
@@ -30,6 +30,9 @@ tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluati
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
 tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
 tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
+tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
+tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
+tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -54,7 +57,10 @@ class Options(object):
         self.num_eval_images = FLAGS.num_eval_images
         self.interactive = FLAGS.interactive
         self.patch_size = FLAGS.patch_size
+        self.stride = FLAGS.stride
         self.gpu = FLAGS.gpu
+        self.image_augmentation = FLAGS.image_augmentation
+        self.dropout = FLAGS.dropout
 
 
 class ConvolutionalModel:
@@ -81,7 +87,7 @@ class ConvolutionalModel:
         # recenter in [-.5, .5]
         data = patches - 0.5
 
-    def make_unet(self, X, training=False):
+    def make_unet(self, X):
         """Build a U-Net architecture
         Args:
             X (4-D Tensor): (N, H, W, C)
@@ -97,23 +103,30 @@ class ConvolutionalModel:
         """
         net = X - 0.5  # TODO check
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
-        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1")
-        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2")
-        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3")
-        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4")
-        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False)
+
+        dropout_keep = tf.placeholder_with_default(1.0, shape=())
+        training = tf.placeholder_with_default(False, shape=())
+
+        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1", dropout_keep=dropout_keep)
+        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2", dropout_keep=dropout_keep)
+        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3", dropout_keep=dropout_keep)
+        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4", dropout_keep=dropout_keep)
+        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False, dropout_keep=dropout_keep)
 
         up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False)
+        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False, dropout_keep=dropout_keep)
 
         up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False)
+        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False, dropout_keep=dropout_keep)
 
         up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False)
+        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False, dropout_keep=dropout_keep)
 
         up9 = upsample_concat(conv8, conv1, name="9")
         conv9 = conv_conv_pool(up9, [8, 8], training, name="9", pool=False)
+
+        self._dropout_keep = dropout_keep
+        self._training = training
 
         return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
 
@@ -156,7 +169,8 @@ class ConvolutionalModel:
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
         predict_logits = self.make_unet(patches_node)
-        predictions = tf.argmax(predict_logits, axis=3)
+        predictions = tf.nn.softmax(predict_logits, dim=3)
+        predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
         self.add_metrics_summary(labels_node, predictions)
@@ -205,8 +219,8 @@ class ConvolutionalModel:
         """
         opts = self._options
 
-        patches = images.extract_patches(imgs, opts.patch_size)
-        labels_patches = images.extract_patches(labels, opts.patch_size)
+        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
+        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
         labels_patches = (labels_patches >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
@@ -221,7 +235,9 @@ class ConvolutionalModel:
             batch_indices = indices[offset:offset + opts.batch_size]
             feed_dict = {
                 self._patches_node: patches[batch_indices, :, :, :],
-                self._labels_node: labels_patches[batch_indices]
+                self._labels_node: labels_patches[batch_indices],
+                self._dropout_keep: opts.dropout,
+                self._training: False,  # TODO
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
@@ -265,7 +281,7 @@ class ConvolutionalModel:
         num_images = imgs.shape[0]
         print("Running prediction on {} images... ".format(num_images), end="")
 
-        patches = images.extract_patches(imgs, opts.patch_size)
+        patches = images.extract_patches(imgs, opts.patch_size, opts.stride)
         num_patches = patches.shape[0]
         num_channel = imgs.shape[3]
 
@@ -292,7 +308,7 @@ class ConvolutionalModel:
 
         # construct masks
         new_shape = (num_images, patches_per_image, opts.patch_size, opts.patch_size, 1)
-        masks = images.images_from_patches(eval_predictions.reshape(new_shape))
+        masks = images.images_from_patches(eval_predictions.reshape(new_shape), stride=opts.stride)
         print("Done")
         return masks
 
@@ -332,8 +348,12 @@ class ConvolutionalModel:
 
 def main(_):
     opts = Options()
+    if opts.gpu == -1:
+        config = tf.ConfigProto()
+    else:
+        config = tf.ConfigProto(device_count={'GPU': opts.gpu}, allow_soft_placement=True)
 
-    with tf.Graph().as_default(), tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
+    with tf.Graph().as_default(), tf.Session(config=config) as session:
         device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
         print("Running on device {}".format(device))
         with tf.device(device):
@@ -356,10 +376,11 @@ def main(_):
             print("Running inference on eval data {}".format(opts.eval_data_dir))
             eval_images = images.load(opts.eval_data_dir)
             masks = model.predict(eval_images)
+            masks = images.quantize_mask(masks, patch_size=IMG_PATCH_SIZE, threshold=FOREGROUND_THRESHOLD)
             overlays = images.overlays(eval_images, masks)
             save_dir = os.path.abspath(os.path.join(opts.save_path, model.experiment_name))
             images.save_all(overlays, save_dir)
-            images.save_submission_csv(masks, os.path.join(save_dir, "submission.csv"), IMG_PATCH_SIZE)
+            images.save_submission_csv(masks, save_dir, IMG_PATCH_SIZE)
 
         if opts.interactive:
             code.interact(local=locals())

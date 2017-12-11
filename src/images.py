@@ -18,14 +18,14 @@ def load(directory):
     """Extract the images in `directory` into a tensor [num_images, height, width(, channels)]"""
     print('Loading images from {} ...'.format(directory))
     images = []
-    for i, file_path in enumerate(glob.glob(os.path.join(directory, '*.png'))):
+    for i, file_path in enumerate(sorted(glob.glob(os.path.join(directory, '*.png')))):
         img = mpimg.imread(file_path)
         images.append(img)
     print("Loaded {} images from {}".format(len(images), directory))
     return np.asarray(images)
 
 
-def extract_patches(images, patch_size, stride=None):
+def extract_patches(images, patch_size, stride=None, augmented=False):
     """extract square patches from a batch of images
 
     images:
@@ -38,6 +38,17 @@ def extract_patches(images, patch_size, stride=None):
         4D input: [num_patches, patch_size, patch_size, num_channel]
         3D input: [num_patches, patch_size, patch_size]
     """
+    if augmented:
+        print("Start image augmentation: {} initial images".format(images.shape[0]))
+        rotations = []
+        for k in range(0, 4):
+            rotations.append(np.rot90(images, k, axes=(1, 2)))
+        images = np.concatenate(rotations, axis=0)
+        print("After 90 degree rotations: {} images".format(images.shape[0]))
+
+        flips = [images, np.fliplr(images), np.flipud(images)]
+        images = np.concatenate(flips, axis=0)
+        print("After ud lr flips: {} images".format(images.shape[0]))
 
     if not stride:
         stride = patch_size
@@ -48,10 +59,11 @@ def extract_patches(images, patch_size, stride=None):
         images = np.expand_dims(images, -1)
 
     num_images, image_height, image_width, num_channel = images.shape
-    assert image_height == image_width
+    assert image_height == image_width, "Assume square images"
+    assert (image_height - patch_size) % stride == 0, "Stride sliding should cover the whole image"
 
-    border_margin = int((patch_size - stride) / 2)
-    assert border_margin % 1 == 0
+    patches_per_side = int((image_height - patch_size) / stride) + 1
+    num_patches = num_images * patches_per_side * patches_per_side
 
     num_patches_image = int(((image_width - border_margin*2) / stride))**2
     assert num_patches_image % 1 == 0
@@ -64,7 +76,7 @@ def extract_patches(images, patch_size, stride=None):
     for n in range(0, num_images):
         for x in range(0, image_width - patch_size + 1, stride):
             for y in range(0, image_height - patch_size + 1, stride):
-                patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size,:]
+                patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size, :]
                 patch_idx += 1
 
     if not has_channels:
@@ -118,7 +130,7 @@ def overlays(imgs, masks, fade=0.2):
     return results
 
 
-def images_from_patches(patches, stride=None, border_majority_only=True, normalize=True):
+def images_from_patches(patches, stride=None):
     """Transform a list of patches into images
 
     patches:
@@ -134,48 +146,24 @@ def images_from_patches(patches, stride=None, border_majority_only=True, normali
     if stride is None:
         stride = patch_size
 
-
     num_patches_side = int(np.sqrt(num_patches))
+    assert np.sqrt(num_patches) == num_patches_side, "Square image assumption broken"
+    image_size = (num_patches_side - 1) * stride + patch_size
 
-    border_margin = patch_size - stride
-    border_margin_os = int(border_margin / 2)
-
-    total_stride_length = num_patches_side * stride
-    image_size = total_stride_length + border_margin
-
-    assert np.sqrt(num_patches) == (image_size - border_margin) / stride, "Square image assumption broken"
-
-    count = np.zeros(shape=(num_images, image_size, image_size, num_channel))
-    sum_ = np.zeros(shape=(num_images, image_size, image_size, num_channel))
+    images = np.zeros(shape=(num_images, image_size, image_size, num_channel), dtype=patches.dtype)
+    count_hits = np.zeros(shape=(num_images, image_size, image_size, num_channel), dtype=np.uint64)
 
     for n in range(0, num_images):
         patch_idx = 0
-        for x in range(0, image_size - border_margin, stride):
-            x_start = x
-            x_stop = x + patch_size
-            for y in range(0, image_size - border_margin, stride):
-                y_start = y
-                y_stop = y + patch_size
-                count[n, y_start:y_stop, x_start:x_stop, :] += 1
-                sum_[n, y_start:y_stop, x_start:x_stop, :] += patches[n, patch_idx]
+        for x in range(0, image_size - patch_size + 1, stride):
+            for y in range(0, image_size - patch_size + 1, stride):
+                images[n, y:y + patch_size, x:x + patch_size] += patches[n, patch_idx]
+                count_hits[n, y:y + patch_size, x:x + patch_size] += 1
                 patch_idx += 1
 
-    if normalize:
-        images = sum_ / count
-    else:
-        images = sum_
+    images = images / count_hits
 
-    if border_majority_only:
-        for n in range(0, num_images):
-            patch_idx = 0
-            for x in range(border_margin_os, image_size - border_margin_os, stride):
-                x_start = x
-                x_stop = x + stride
-                for y in range(border_margin_os, image_size - border_margin_os, stride):
-                    y_start = y
-                    y_stop = y + stride
-                    images[n,y_start:y_stop, x_start:x_stop, :] = patches[n, patch_idx, border_margin_os:patch_size-border_margin_os, border_margin_os:patch_size-border_margin_os]
-                    patch_idx += 1
+    return images
 
     return images
 
@@ -263,3 +251,16 @@ def load_train_data(directory, patch_size):
     train_groundtruth = load(train_labels_dir)
 
     return train_images, train_groundtruth
+
+
+def quantize_mask(masks, threshold, patch_size):
+    num_images, img_size, _, _ = masks.shape
+
+    quantized_masks = masks.copy()
+    for n in range(num_images):
+        for y in range(0, img_size, patch_size):
+            for x in range(0, img_size, patch_size):
+                label = masks[n, y:y + patch_size, x:x + patch_size, 0].mean() > threshold
+                quantized_masks[n, y:y + patch_size, x:x + patch_size, 0] = label
+
+    return quantized_masks
