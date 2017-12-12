@@ -4,7 +4,6 @@ import os
 import matplotlib.image as mpimg
 import numpy as np
 from PIL import Image
-from scipy.stats import mode
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
@@ -75,6 +74,7 @@ def extract_patches(images, patch_size, stride=None, augmented=False):
         patches = np.squeeze(patches, -1)
 
     return patches
+
 
 def labels_for_patches(patches):
     """Compute the label for a some patches
@@ -157,7 +157,6 @@ def images_from_patches(patches, stride=None):
 
     return images
 
-    return images
 
 def predictions_to_patches(predictions, patch_size):
     """Expand each prediction to a square patch
