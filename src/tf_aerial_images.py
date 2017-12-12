@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
+from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD, IMAGE_WIDTH, IMAGE_HEIGHT
 from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
@@ -152,7 +152,24 @@ class ConvolutionalModel:
     def image_summary(self):
         opts = self._options
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
-        self._image_summary = tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)
+        self._image_summary = [tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)]
+
+        # eval data placeholders
+        self._eval_predictions = tf.placeholder(tf.int64, name="eval_predictions")
+        self._eval_labels = tf.placeholder(tf.int64, name="eval_labels")
+
+        predictions = self._eval_predictions
+        labels = self._eval_labels
+
+        accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
+        recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
+        precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
+        f1_score = 2 / (1 / recall + 1 / precision)
+        self._image_summary.append(tf.summary.scalar("eval accuracy", accuracy))
+        self._image_summary.append(tf.summary.scalar("eval recall", recall))
+        self._image_summary.append(tf.summary.scalar("eval precision", precision))
+        self._image_summary.append(tf.summary.scalar("eval f1_score", f1_score))
+        self._image_summary = tf.summary.merge(self._image_summary)
 
     def build_graph(self):
         """Build the graph for the full model."""
@@ -258,9 +275,17 @@ class ConvolutionalModel:
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
 
+                feed_predictions = (np.squeeze(masks) >= 0.5) * 1
+                feed_labels = (labels[:opts.num_eval_images, :, :] >= 0.5) * 1
+
+                feed_dict_eval = {
+                    self._images_to_display: overlays,
+                    self._eval_predictions: feed_predictions,
+                    self._eval_labels: feed_labels
+                }
                 # display in summary
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
-                                                    feed_dict={self._images_to_display: overlays})
+                                                    feed_dict=feed_dict_eval)
                 self.summary_writer.add_summary(image_sum, global_step=step)
         print()
 
