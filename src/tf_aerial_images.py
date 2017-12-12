@@ -33,6 +33,9 @@ tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
+tf.app.flags.DEFINE_boolean('batch_normalization', False, "Apply batch normalization in U-net")
+tf.app.flags.DEFINE_boolean('use_small_model', False, "Use the small model (128 max instead of 1024)")
+
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -61,7 +64,8 @@ class Options(object):
         self.gpu = FLAGS.gpu
         self.image_augmentation = FLAGS.image_augmentation
         self.dropout = FLAGS.dropout
-
+        self.batch_normalization = FLAGS.batch_normalization
+        self.use_small_model = FLAGS.use_small_model
 
 class ConvolutionalModel:
     """Two layers patch convolution model (baseline)"""
@@ -87,7 +91,7 @@ class ConvolutionalModel:
         # recenter in [-.5, .5]
         data = patches - 0.5
 
-    def make_unet(self, X):
+    def make_unet(self, X, use_big_model=True):
         """Build a U-Net architecture
         Args:
             X (4-D Tensor): (N, H, W, C)
@@ -104,29 +108,33 @@ class ConvolutionalModel:
         net = X - 0.5
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
 
-        dropout_keep = tf.placeholder_with_default(1.0, shape=())
-        training = tf.placeholder_with_default(False, shape=())
+        big_model = [64, 128, 256, 512, 1024, 512, 256, 128, 64]
+        small_model = [8, 16, 32, 64, 128, 64, 32, 16, 8]
+        model_size = iter(big_model if use_big_model else small_model)
 
-        conv1, pool1 = conv_conv_pool(net, [64, 64], training, name="1", dropout_keep=dropout_keep)
-        conv2, pool2 = conv_conv_pool(pool1, [128, 128], training, name="2", dropout_keep=dropout_keep)
-        conv3, pool3 = conv_conv_pool(pool2, [256, 256], training, name="3", dropout_keep=dropout_keep)
-        conv4, pool4 = conv_conv_pool(pool3, [512, 512], training, name="4", dropout_keep=dropout_keep)
-        conv5 = conv_conv_pool(pool4, [1024, 1024], training, name="5", pool=False, dropout_keep=dropout_keep)
+        dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
+        enable_batch_normalization = tf.placeholder_with_default(False, shape=(), name="enable_batch_normalization")
+
+        conv1, pool1 = conv_conv_pool(net, next(model_size), enable_batch_normalization, name="1", dropout_keep=dropout_keep)
+        conv2, pool2 = conv_conv_pool(pool1, next(model_size), enable_batch_normalization, name="2", dropout_keep=dropout_keep)
+        conv3, pool3 = conv_conv_pool(pool2, next(model_size), enable_batch_normalization, name="3", dropout_keep=dropout_keep)
+        conv4, pool4 = conv_conv_pool(pool3, next(model_size), enable_batch_normalization, name="4", dropout_keep=dropout_keep)
+        conv5 = conv_conv_pool(pool4, next(model_size), enable_batch_normalization, name="5", pool=False, dropout_keep=dropout_keep)
 
         up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, [512, 512], training, name="6", pool=False, dropout_keep=dropout_keep)
+        conv6 = conv_conv_pool(up6, next(model_size), enable_batch_normalization, name="6", pool=False, dropout_keep=dropout_keep)
 
         up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, [256, 256], training, name="7", pool=False, dropout_keep=dropout_keep)
+        conv7 = conv_conv_pool(up7, next(model_size), enable_batch_normalization, name="7", pool=False, dropout_keep=dropout_keep)
 
         up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, [128, 128], training, name="8", pool=False, dropout_keep=dropout_keep)
+        conv8 = conv_conv_pool(up8, next(model_size), enable_batch_normalization, name="8", pool=False, dropout_keep=dropout_keep)
 
         up9 = upsample_concat(conv8, conv1, name="9")
-        conv9 = conv_conv_pool(up9, [64, 64], training, name="9", pool=False)
+        conv9 = conv_conv_pool(up9, next(model_size), enable_batch_normalization, name="9", pool=False)
 
         self._dropout_keep = dropout_keep
-        self._training = training
+        self._enable_batch_normalization = enable_batch_normalization
 
         return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
 
@@ -168,7 +176,7 @@ class ConvolutionalModel:
         labels_node = tf.placeholder(tf.int64,
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
-        predict_logits = self.make_unet(patches_node)
+        predict_logits = self.make_unet(patches_node, use_big_model=not opts.use_small_model)
         predictions = tf.nn.softmax(predict_logits, dim=3)
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
@@ -238,7 +246,7 @@ class ConvolutionalModel:
                 self._patches_node: patches[batch_indices, :, :, :],
                 self._labels_node: labels_patches[batch_indices],
                 self._dropout_keep: opts.dropout,
-                self._training: False,  # TODO
+                self._enable_batch_normalization: opts.batch_normalization,
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
@@ -371,7 +379,7 @@ def main(_):
                 print("==== Train epoch: {} ====".format(i))
                 tf.local_variables_initializer().run()  # Reset scores
                 model.train(train_images, train_groundtruth)  # Process one epoch
-                model.save(i)  # Save model to disk
+                # model.save(i)  # Save model to disk
 
         if opts.eval_data_dir:
             print("Running inference on eval data {}".format(opts.eval_data_dir))
