@@ -101,29 +101,29 @@ class ConvolutionalModel:
         Source:
             https://github.com/kkweon/UNet-in-Tensorflow/blob/master/train.py
         """
-        net = X - 0.5  # TODO check
+        net = X - 0.5
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
 
         dropout_keep = tf.placeholder_with_default(1.0, shape=())
         training = tf.placeholder_with_default(False, shape=())
 
-        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1", dropout_keep=dropout_keep)
-        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2", dropout_keep=dropout_keep)
-        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3", dropout_keep=dropout_keep)
-        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4", dropout_keep=dropout_keep)
-        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False, dropout_keep=dropout_keep)
+        conv1, pool1 = conv_conv_pool(net, [64, 64], training, name="1", dropout_keep=dropout_keep)
+        conv2, pool2 = conv_conv_pool(pool1, [128, 128], training, name="2", dropout_keep=dropout_keep)
+        conv3, pool3 = conv_conv_pool(pool2, [256, 256], training, name="3", dropout_keep=dropout_keep)
+        conv4, pool4 = conv_conv_pool(pool3, [512, 512], training, name="4", dropout_keep=dropout_keep)
+        conv5 = conv_conv_pool(pool4, [1024, 1024], training, name="5", pool=False, dropout_keep=dropout_keep)
 
         up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False, dropout_keep=dropout_keep)
+        conv6 = conv_conv_pool(up6, [512, 512], training, name="6", pool=False, dropout_keep=dropout_keep)
 
         up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False, dropout_keep=dropout_keep)
+        conv7 = conv_conv_pool(up7, [256, 256], training, name="7", pool=False, dropout_keep=dropout_keep)
 
         up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False, dropout_keep=dropout_keep)
+        conv8 = conv_conv_pool(up8, [128, 128], training, name="8", pool=False, dropout_keep=dropout_keep)
 
         up9 = upsample_concat(conv8, conv1, name="9")
-        conv9 = conv_conv_pool(up9, [8, 8], training, name="9", pool=False)
+        conv9 = conv_conv_pool(up9, [64, 64], training, name="9", pool=False)
 
         self._dropout_keep = dropout_keep
         self._training = training
@@ -220,7 +220,8 @@ class ConvolutionalModel:
         opts = self._options
 
         patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
-        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
+        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride,
+                                                augmented=opts.image_augmentation)
         labels_patches = (labels_patches >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
