@@ -90,17 +90,14 @@ def labels_for_patches(patches):
     return foreground.astype(np.int64)
 
 
-def overlays(imgs, masks, fade=0.2):
+def overlays(imgs, masks, fade=0.95):
     """Add the masks on top of the images with red transparency
-
     imgs:
         array of images
         shape: [num_images, im_height, im_width, num_channel]
-
     masks:
         array of masks
         shape: [num_images, im_height, im_width, 1]
-
     returns:
         [num_images, im_height, im_width, num_channel]
     """
@@ -110,7 +107,7 @@ def overlays(imgs, masks, fade=0.2):
     imgs = img_float_to_uint8(imgs)
     masks = img_float_to_uint8(masks.squeeze())
     masks_red = np.zeros((num_images, im_height, im_width, 4), dtype=np.uint8)
-    masks_red[:, :, :, 0] = masks
+    masks_red[:, :, :, 0] = 255
     masks_red[:, :, :, 3] = masks * fade
 
     results = np.zeros((num_images, im_width, im_height, 4), dtype=np.uint8)
