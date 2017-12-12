@@ -53,7 +53,6 @@ class Options(object):
         self.lr = FLAGS.lr
         self.momentum = FLAGS.momentum
         self.eval_every = FLAGS.eval_every
-        self.lambda_reg = FLAGS.lambda_reg
         self.num_eval_images = FLAGS.num_eval_images
         self.interactive = FLAGS.interactive
         self.patch_size = FLAGS.patch_size
@@ -61,8 +60,6 @@ class Options(object):
         self.gpu = FLAGS.gpu
         self.image_augmentation = FLAGS.image_augmentation
         self.dropout = FLAGS.dropout
-        self.batch_normalization = FLAGS.batch_normalization
-        self.use_small_model = FLAGS.use_small_model
         self.num_layers = FLAGS.num_layers
         self.root_size = FLAGS.root_size
 
@@ -98,7 +95,6 @@ class ConvolutionalModel:
         for layer_i in range(num_layers):
             if dropout_keep is not None:
                 net = tf.nn.dropout(net, dropout_keep)
-            print(layer_i, net.shape)
 
             with tf.variable_scope("conv_{}".format(layer_i)):
                 net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
@@ -142,8 +138,8 @@ class ConvolutionalModel:
         batch_size, patch_height, patch_width = labels.shape
 
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=tf.reshape(pred_logits, (batch_size * patch_height * patch_width, 2)),
-            labels=tf.reshape(labels, (batch_size * patch_height * patch_width,)))
+            logits=pred_logits,
+            labels=labels)
         loss = tf.reduce_mean(cross_entropy)
 
         return loss
@@ -173,9 +169,6 @@ class ConvolutionalModel:
         global_step = tf.Variable(0, name="global_step")
         self._global_step = global_step
 
-        # TODO
-        opts.patch_size = 572
-
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
                                       shape=(opts.batch_size, self.input_size, self.input_size, NUM_CHANNELS))
@@ -187,7 +180,7 @@ class ConvolutionalModel:
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
-        self.add_metrics_summary(labels_node, predictions)
+        # self.add_metrics_summary(labels_node, predictions)
 
         self._train, self._learning_rate = self.optimize(loss)
         self.summary_ops.append(tf.summary.scalar("loss", loss))
@@ -213,6 +206,7 @@ class ConvolutionalModel:
 
     def add_metrics_summary(self, labels, predictions):
         """add accuracy, precision, recall, f1_score to tensorboard"""
+        # TODO does not work
         flat_labels = tf.layers.flatten(labels)
         flat_predictions = tf.layers.flatten(predictions)
         accuracy = tf.metrics.accuracy(labels=flat_labels, predictions=flat_predictions)[1]
@@ -235,6 +229,8 @@ class ConvolutionalModel:
         opts = self._options
 
         patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
+        patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
+
         labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride,
                                                 augmented=opts.image_augmentation)
         labels_patches = (labels_patches >= 0.5) * 1.
@@ -253,7 +249,6 @@ class ConvolutionalModel:
                 self._patches_node: patches[batch_indices, :, :, :],
                 self._labels_node: labels_patches[batch_indices],
                 self._dropout_keep: opts.dropout,
-                self._enable_batch_normalization: opts.batch_normalization,
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
@@ -298,6 +293,7 @@ class ConvolutionalModel:
         print("Running prediction on {} images... ".format(num_images), end="")
 
         patches = images.extract_patches(imgs, opts.patch_size, opts.stride)
+        patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
         num_patches = patches.shape[0]
         num_channel = imgs.shape[3]
 

@@ -257,7 +257,7 @@ def quantize_mask(masks, threshold, patch_size):
     return quantized_masks
 
 
-def mirror_border(images, n = 2):
+def mirror_border(images, n):
     """mirrors border n border pixels on each side and corner:
         4D [num_images, image_height, image_width, num_channel]
         or 3D [num_images, image_height, image_width]
@@ -277,7 +277,3 @@ def mirror_border(images, n = 2):
         extended = np.squeeze(extended, -1)
 
     return extended
-
-
-
-
