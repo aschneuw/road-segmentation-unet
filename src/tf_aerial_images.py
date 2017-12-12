@@ -8,7 +8,6 @@ import tensorflow as tf
 
 import images
 from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
-from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write checkpoints, overlays and submissions")
@@ -35,7 +34,6 @@ tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set o
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
 tf.app.flags.DEFINE_boolean('batch_normalization', False, "Apply batch normalization in U-net")
 tf.app.flags.DEFINE_boolean('use_small_model', False, "Use the small model (128 max instead of 1024)")
-
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -67,6 +65,7 @@ class Options(object):
         self.batch_normalization = FLAGS.batch_normalization
         self.use_small_model = FLAGS.use_small_model
 
+
 class ConvolutionalModel:
     """Two layers patch convolution model (baseline)"""
 
@@ -84,59 +83,68 @@ class ConvolutionalModel:
         summary_path = os.path.join(options.log_dir, self.experiment_name)
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
-    def forward(self, patches):
-        """Build the graph for the forward pass."""
-        opts = self._options
+    def make_unet(self, X, num_layers, root_size):
+        dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
 
-        # recenter in [-.5, .5]
-        data = patches - 0.5
-
-    def make_unet(self, X, use_big_model=True):
-        """Build a U-Net architecture
-        Args:
-            X (4-D Tensor): (N, H, W, C)
-            training (1-D Tensor): Boolean Tensor is required for batchnormalization layers
-        Returns:
-            output (4-D Tensor): (N, H, W, 2)
-
-        Notes:
-            U-Net: Convolutional Networks for Biomedical Image Segmentation
-            https://arxiv.org/abs/1505.04597
-        Source:
-            https://github.com/kkweon/UNet-in-Tensorflow/blob/master/train.py
-        """
         net = X - 0.5
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
 
-        big_model = [64, 128, 256, 512, 1024, 512, 256, 128, 64]
-        small_model = [8, 16, 32, 64, 128, 64, 32, 16, 8]
-        model_size = iter(big_model if use_big_model else small_model)
+        num_filters = root_size
+        conv = []
 
-        dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
-        enable_batch_normalization = tf.placeholder_with_default(False, shape=(), name="enable_batch_normalization")
+        for layer_i in range(num_layers):
+            if dropout_keep is not None:
+                net = tf.nn.dropout(net, dropout_keep)
+            print(layer_i, net.shape)
 
-        conv1, pool1 = conv_conv_pool(net, next(model_size), enable_batch_normalization, name="1", dropout_keep=dropout_keep)
-        conv2, pool2 = conv_conv_pool(pool1, next(model_size), enable_batch_normalization, name="2", dropout_keep=dropout_keep)
-        conv3, pool3 = conv_conv_pool(pool2, next(model_size), enable_batch_normalization, name="3", dropout_keep=dropout_keep)
-        conv4, pool4 = conv_conv_pool(pool3, next(model_size), enable_batch_normalization, name="4", dropout_keep=dropout_keep)
-        conv5 = conv_conv_pool(pool4, next(model_size), enable_batch_normalization, name="5", pool=False, dropout_keep=dropout_keep)
+            with tf.variable_scope("conv_{}".format(layer_i)):
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
+                net = tf.nn.relu(net, name="relu1")
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
+                net = tf.nn.relu(net, name="relu2")
 
-        up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, next(model_size), enable_batch_normalization, name="6", pool=False, dropout_keep=dropout_keep)
+            conv.append(net)
+            net = tf.layers.max_pooling2d(net, (2, 2), strides=(2, 2), name="pool")
 
-        up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, next(model_size), enable_batch_normalization, name="7", pool=False, dropout_keep=dropout_keep)
+            num_filters *= 2
 
-        up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, next(model_size), enable_batch_normalization, name="8", pool=False, dropout_keep=dropout_keep)
+        num_filters = int(num_filters / 2)
+        net = conv.pop()
 
-        up9 = upsample_concat(conv8, conv1, name="9")
-        conv9 = conv_conv_pool(up9, next(model_size), enable_batch_normalization, name="9", pool=False)
+        for layer_i in range(num_layers - 1):
+            num_filters = int(num_filters / 2)
 
-        self._dropout_keep = dropout_keep
-        self._enable_batch_normalization = enable_batch_normalization
+            if dropout_keep is not None:
+                net = tf.nn.dropout(net, dropout_keep)
 
-        return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
+            with tf.variable_scope("expand_{}".format(layer_i)):
+                net = tf.layers.conv2d_transpose(net, num_filters, strides=(2, 2), kernel_size=(2, 2), name="up_conv")
+
+                traverse = conv.pop()
+                traverse = tf.image.resize_image_with_crop_or_pad(traverse, int(net.shape[1]), int(net.shape[2]))
+                net = tf.concat([traverse, net], axis=3, name="concat")
+
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
+                net = tf.nn.relu(net, name="relu1")
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
+                net = tf.nn.relu(net, name="relu2")
+
+        assert len(conv) == 0
+
+        net = tf.layers.conv2d(net, 2, (1, 1), padding='same', name="weight_output")
+        return net
+
+    @staticmethod
+    def input_size_needed(output_size, num_layers):
+        for i in range(num_layers - 1):
+            assert output_size % 2 == 0, 'expand layer {} has size {} not divisible by 2' \
+                .format(num_layers - i, output_size)
+            output_size = (output_size + 4) / 2
+
+        for i in range(num_layers - 1):
+            output_size = (output_size + 4) * 2
+
+        return int(output_size + 4)
 
     def cross_entropy_loss(self, labels, pred_logits):
         batch_size, patch_height, patch_width = labels.shape
@@ -170,13 +178,16 @@ class ConvolutionalModel:
         global_step = tf.Variable(0, name="global_step")
         self._global_step = global_step
 
+        # TODO
+        opts.patch_size = 572
+
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
                                       shape=(opts.batch_size, opts.patch_size, opts.patch_size, NUM_CHANNELS))
         labels_node = tf.placeholder(tf.int64,
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
-        predict_logits = self.make_unet(patches_node, use_big_model=not opts.use_small_model)
+        predict_logits = self.make_unet(patches_node, root_size=64, num_layers=5)
         predictions = tf.nn.softmax(predict_logits, dim=3)
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
