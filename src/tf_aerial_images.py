@@ -72,6 +72,7 @@ class ConvolutionalModel:
         self._session = session
 
         np.random.seed(options.seed)
+        tf.set_random_seed(options.seed)
         self.input_size = input_size_needed(options.patch_size, options.num_layers)
 
         self.summary_ops = []
@@ -382,7 +383,7 @@ def main(_):
                 print("==== Train epoch: {} ====".format(i))
                 tf.local_variables_initializer().run()  # Reset scores
                 model.train(train_images, train_groundtruth)  # Process one epoch
-                # model.save(i)  # Save model to disk
+                model.save(i)  # Save model to disk
 
         if opts.eval_data_dir:
             print("Running inference on eval data {}".format(opts.eval_data_dir))
