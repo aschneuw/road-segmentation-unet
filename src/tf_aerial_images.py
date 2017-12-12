@@ -22,8 +22,7 @@ tf.app.flags.DEFINE_boolean('interactive', False, "Spawn interactive Tensorflow 
 tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")
 tf.app.flags.DEFINE_integer('batch_size', 25, "Batch size of training instances")
 tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
-tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
-tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
+tf.app.flags.DEFINE_float('momentum', 0.9, "Momentum")
 tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
 tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
@@ -32,8 +31,8 @@ tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
-tf.app.flags.DEFINE_boolean('batch_normalization', False, "Apply batch normalization in U-net")
-tf.app.flags.DEFINE_boolean('use_small_model', False, "Use the small model (128 max instead of 1024)")
+tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-Net layer")
+tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -64,6 +63,8 @@ class Options(object):
         self.dropout = FLAGS.dropout
         self.batch_normalization = FLAGS.batch_normalization
         self.use_small_model = FLAGS.use_small_model
+        self.num_layers = FLAGS.num_layers
+        self.root_size = FLAGS.root_size
 
 
 class ConvolutionalModel:
@@ -74,6 +75,7 @@ class ConvolutionalModel:
         self._session = session
 
         np.random.seed(options.seed)
+        self.input_size = input_size_needed(options.patch_size, options.num_layers)
 
         self.summary_ops = []
         self.build_graph()
@@ -85,6 +87,7 @@ class ConvolutionalModel:
 
     def make_unet(self, X, num_layers, root_size):
         dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
+        self._dropout_keep = dropout_keep
 
         net = X - 0.5
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
@@ -132,19 +135,8 @@ class ConvolutionalModel:
         assert len(conv) == 0
 
         net = tf.layers.conv2d(net, 2, (1, 1), padding='same', name="weight_output")
+
         return net
-
-    @staticmethod
-    def input_size_needed(output_size, num_layers):
-        for i in range(num_layers - 1):
-            assert output_size % 2 == 0, 'expand layer {} has size {} not divisible by 2' \
-                .format(num_layers - i, output_size)
-            output_size = (output_size + 4) / 2
-
-        for i in range(num_layers - 1):
-            output_size = (output_size + 4) * 2
-
-        return int(output_size + 4)
 
     def cross_entropy_loss(self, labels, pred_logits):
         batch_size, patch_height, patch_width = labels.shape
@@ -160,10 +152,13 @@ class ConvolutionalModel:
         """Build the graph to optimize the loss function."""
         opts = self._options
 
+        learning_rate = tf.train.exponential_decay(opts.lr, self._global_step,
+                                                   1000, 0.95, staircase=True)
+
         # Use simple momentum for the optimization.
-        optimizer = tf.train.AdamOptimizer(learning_rate=opts.lr)
+        optimizer = tf.train.MomentumOptimizer(learning_rate, opts.momentum)
         train = optimizer.minimize(loss, global_step=self._global_step)
-        return train
+        return train, learning_rate
 
     def image_summary(self):
         opts = self._options
@@ -183,19 +178,20 @@ class ConvolutionalModel:
 
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
-                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size, NUM_CHANNELS))
+                                      shape=(opts.batch_size, self.input_size, self.input_size, NUM_CHANNELS))
         labels_node = tf.placeholder(tf.int64,
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
-        predict_logits = self.make_unet(patches_node, root_size=64, num_layers=5)
+        predict_logits = self.make_unet(patches_node, root_size=opts.root_size, num_layers=opts.num_layers)
         predictions = tf.nn.softmax(predict_logits, dim=3)
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
         self.add_metrics_summary(labels_node, predictions)
 
-        self._train = self.optimize(loss)
+        self._train, self._learning_rate = self.optimize(loss)
         self.summary_ops.append(tf.summary.scalar("loss", loss))
+        self.summary_ops.append(tf.summary.scalar("learning_rate", self._learning_rate))
 
         self._loss = loss
         self._predictions = predictions
@@ -404,6 +400,18 @@ def main(_):
 
         if opts.interactive:
             code.interact(local=locals())
+
+
+def input_size_needed(output_size, num_layers):
+    for i in range(num_layers - 1):
+        assert output_size % 2 == 0, 'expand layer {} has size {} not divisible by 2' \
+            .format(num_layers - i, output_size)
+        output_size = (output_size + 4) / 2
+
+    for i in range(num_layers - 1):
+        output_size = (output_size + 4) * 2
+
+    return int(output_size + 4)
 
 
 if __name__ == '__main__':
