@@ -270,7 +270,8 @@ class ConvolutionalModel:
                 overlays = images.overlays(images_to_predict, masks)
 
                 final_f_score = self.training_final_f_score(imgs, labels)
-                self.add_value_to_summary("training_patch_f1", step, final_f_score)
+                print("patch_f_training_score:{}".format(final_f_score))
+                #self.add_value_to_summary("training_patch_f1", step, final_f_score)
 
                 # display in summary
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
