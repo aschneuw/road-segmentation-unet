@@ -300,7 +300,7 @@ class ConvolutionalModel:
         precision = tf.metrics.precision(labels=true_labels, predictions=pred_labels)[1]
         f1_score = 2 / (1 / recall + 1 / precision)
 
-        return f1_score
+        return f1_score[1]
 
     def add_value_to_summary(self, name, step, y):
         summary = tf.Summary()
