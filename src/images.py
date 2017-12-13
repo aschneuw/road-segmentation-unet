@@ -274,3 +274,16 @@ def mirror_border(images, n):
         extended = np.squeeze(extended, -1)
 
     return extended
+
+def overlap_pred_true(pred, true):
+    num_images, im_height, im_width = pred.shape
+    true_mask = img_float_to_uint8(true)
+    pred_mask = img_float_to_uint8(pred)
+
+    overlapped_mask = np.zeros((num_images, im_height, im_width, 3), dtype=np.uint8)
+    overlapped_mask[:, :, :, 0] = pred_mask
+    overlapped_mask[:, :, :, 1] = true_mask
+    overlapped_mask[:, :, :, 2] = 0
+
+    return overlapped_mask
+

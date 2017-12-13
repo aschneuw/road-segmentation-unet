@@ -164,10 +164,10 @@ class ConvolutionalModel:
     def eval_summary(self):
         opts = self._options
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
-        self._image_summary = [tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)]
+        self._image_summary = [tf.summary.image('eval_images', self._images_to_display, max_outputs=opts.num_eval_images)]
 
         self._masks_to_display = tf.placeholder(tf.uint8, name="mask_display")
-        self._image_summary.append(tf.summary.image('samples', self._masks_to_display, max_outputs=opts.num_eval_images))
+        self._image_summary.append(tf.summary.image('eval_masks', self._masks_to_display, max_outputs=opts.num_eval_images))
 
         # eval data placeholders
         self._eval_predictions = tf.placeholder(tf.int64, name="eval_predictions")
@@ -183,6 +183,22 @@ class ConvolutionalModel:
         self._image_summary.append(tf.summary.scalar("eval precision", precision))
         self._image_summary.append(tf.summary.scalar("eval f1_score", f1_score))
         self._image_summary = tf.summary.merge(self._image_summary)
+
+    def initialize_overlap_summary(self):
+        opts = self._options
+        self._overlap_images = tf.placeholder(tf.uint8, name="overlap_images")
+        self._overlap_summary = tf.summary.image('groundtruth_vs_prediction', self._overlap_images, max_outputs=opts.num_eval_images)
+
+    def add_to_overlap_summary(self, true_labels, predicted_labels):
+        overlapped = images.overlap_pred_true(predicted_labels, true_labels)
+
+        opts = self._options
+        feed_dict_eval = {
+            self._overlap_images: overlapped
+        }
+        overlap_summary, step = self._session.run([self._overlap_summary, self._global_step],
+                                            feed_dict=feed_dict_eval)
+        self.summary_writer.add_summary(overlap_summary, global_step=step)
 
     def train_summary(self):
         opts = self._options
@@ -240,6 +256,7 @@ class ConvolutionalModel:
 
         self.eval_summary()
         self.train_summary()
+        self.initialize_overlap_summary()
 
         self.summary_op = tf.summary.merge(self.summary_ops)
 
@@ -301,36 +318,47 @@ class ConvolutionalModel:
             # from time to time do full prediction on some images
             if step > 0 and step % opts.eval_every == 0:
                 print()
-                self.add_to_eval_summary(imgs, labels)
+
+                images_to_predict = imgs[:opts.num_eval_images, :, :, :]
+                masks = self.predict(images_to_predict)
+                overlays = images.overlays(images_to_predict, masks)
+                pred_masks = ((masks > 0.5) * 1).squeeze()
+                true_masks = labels[:opts.num_eval_images, :, :].squeeze()
+                eval_predictions = self.img_to_label_patches(masks)
+                eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
+
+                self.add_to_eval_summary(masks, overlays, eval_labels, eval_predictions)
+                self.add_to_overlap_summary(true_masks, pred_masks)
 
             if step > 0 and step % opts.train_score_every == 0:
-                print()
                 self.add_to_training_summary(imgs, labels)
 
         self.summary_writer.flush()
+
+    def add_image_summary(self, name, step, image):
+        image_summary = tf.summary.image(name, image, max_outputs=image.shape[0])
+        image_summary_ = self._session.run(image_summary)
+        self.summary_writer.add_summary(image_summary_, step)
+
+    def generate_eval_patch_summary(self, labels):
+        opts = self._options
+        eval_labels = labels[:opts.num_eval_images, :, :]
+        eval_labels = images.img_float_to_uint8(eval_labels)
+        eval_labels = tf.expand_dims(eval_labels, -1)
+        self.add_image_summary("eval_groundtruth", 0, eval_labels)
 
     def pixel_missclassification_summary(self, num_errors, total):
         misclassification, step = self._session.run([self.misclassification_summary, self._global_step],
                                                     feed_dict={self._missclassification_rate: num_errors / total})
         self.summary_writer.add_summary(misclassification, global_step=step)
 
-
-    def add_to_eval_summary(self, imgs, labels):
+    def add_to_eval_summary(self, masks, overlays, eval_pred, eval_true):
         opts = self._options
-
-        images_to_predict = imgs[:opts.num_eval_images, :, :, :]
-        masks = self.predict(images_to_predict)
-        overlays = images.overlays(images_to_predict, masks)
-
-        # eval summary
-        eval_predictions = self.img_to_label_patches(masks)
-        eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
-
         feed_dict_eval = {
             self._masks_to_display: images.img_float_to_uint8(masks),
             self._images_to_display: overlays,
-            self._eval_predictions: eval_predictions,
-            self._eval_labels: eval_labels
+            self._eval_predictions: eval_pred,
+            self._eval_labels: eval_true
         }
 
         image_sum, step = self._session.run([self._image_summary, self._global_step],
@@ -467,7 +495,7 @@ def main(_):
 
         if opts.num_epoch > 0:
             train_images, train_groundtruth = images.load_train_data(opts.train_data_dir, opts.patch_size)
-
+            model.generate_eval_patch_summary(train_groundtruth)
             for i in range(opts.num_epoch):
                 print("==== Train epoch: {} ====".format(i))
                 tf.local_variables_initializer().run()  # Reset scores
