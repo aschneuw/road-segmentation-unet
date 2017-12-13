@@ -166,6 +166,9 @@ class ConvolutionalModel:
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
         self._image_summary = [tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)]
 
+        self._masks_to_display = tf.placeholder(tf.uint8, name="mask_display")
+        self._image_summary.append(tf.summary.image('samples', self._masks_to_display, max_outputs=opts.num_eval_images))
+
         # eval data placeholders
         self._eval_predictions = tf.placeholder(tf.int64, name="eval_predictions")
         self._eval_labels = tf.placeholder(tf.int64, name="eval_labels")
@@ -324,6 +327,7 @@ class ConvolutionalModel:
         eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
 
         feed_dict_eval = {
+            self._masks_to_display: masks,
             self._images_to_display: overlays,
             self._eval_predictions: eval_predictions,
             self._eval_labels: eval_labels
@@ -365,7 +369,7 @@ class ConvolutionalModel:
         """Run inference on `imgs` and return predicted masks
 
         imgs: [num_images, image_height, image_width, num_channel]
-        returns: masks [num_images, images_height, image_width] with road = 1, other = 0
+        returns: masks [num_images, images_height, image_width] with road probabilities
         """
         opts = self._options
 
@@ -450,9 +454,11 @@ def main(_):
             device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
             print("Running on device {}".format(device))
             with tf.device(device):
+                #specific assignment
                 model = ConvolutionalModel(opts, session)
 
         else:
+            #Random Assignment
             model = ConvolutionalModel(opts, session)
 
         if opts.restore_model:
