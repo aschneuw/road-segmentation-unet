@@ -8,7 +8,6 @@ import tensorflow as tf
 
 import images
 from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD, IMAGE_WIDTH, IMAGE_HEIGHT
-from nn_utils import conv_conv_pool, upsample_concat
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write checkpoints, overlays and submissions")
@@ -23,8 +22,7 @@ tf.app.flags.DEFINE_boolean('interactive', False, "Spawn interactive Tensorflow 
 tf.app.flags.DEFINE_integer('num_epoch', 5, "Number of pass on the dataset during training")
 tf.app.flags.DEFINE_integer('batch_size', 25, "Batch size of training instances")
 tf.app.flags.DEFINE_float('lr', 0.01, "Initial learning rate")
-tf.app.flags.DEFINE_float('momentum', 0.01, "Momentum")
-tf.app.flags.DEFINE_float('lambda_reg', 5e-4, "Weight regularizer")
+tf.app.flags.DEFINE_float('momentum', 0.9, "Momentum")
 tf.app.flags.DEFINE_integer('seed', 2017, "Random seed for reproducibility")
 tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluations")
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
@@ -33,6 +31,8 @@ tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
+tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-Net layer")
+tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -53,7 +53,6 @@ class Options(object):
         self.lr = FLAGS.lr
         self.momentum = FLAGS.momentum
         self.eval_every = FLAGS.eval_every
-        self.lambda_reg = FLAGS.lambda_reg
         self.num_eval_images = FLAGS.num_eval_images
         self.interactive = FLAGS.interactive
         self.patch_size = FLAGS.patch_size
@@ -61,6 +60,8 @@ class Options(object):
         self.gpu = FLAGS.gpu
         self.image_augmentation = FLAGS.image_augmentation
         self.dropout = FLAGS.dropout
+        self.num_layers = FLAGS.num_layers
+        self.root_size = FLAGS.root_size
 
 
 class ConvolutionalModel:
@@ -71,6 +72,7 @@ class ConvolutionalModel:
         self._session = session
 
         np.random.seed(options.seed)
+        self.input_size = input_size_needed(options.patch_size, options.num_layers)
 
         self.summary_ops = []
         self.build_graph()
@@ -80,62 +82,64 @@ class ConvolutionalModel:
         summary_path = os.path.join(options.log_dir, self.experiment_name)
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
-    def forward(self, patches):
-        """Build the graph for the forward pass."""
-        opts = self._options
+    def make_unet(self, X, num_layers, root_size):
+        dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
+        self._dropout_keep = dropout_keep
 
-        # recenter in [-.5, .5]
-        data = patches - 0.5
-
-    def make_unet(self, X):
-        """Build a U-Net architecture
-        Args:
-            X (4-D Tensor): (N, H, W, C)
-            training (1-D Tensor): Boolean Tensor is required for batchnormalization layers
-        Returns:
-            output (4-D Tensor): (N, H, W, 2)
-
-        Notes:
-            U-Net: Convolutional Networks for Biomedical Image Segmentation
-            https://arxiv.org/abs/1505.04597
-        Source:
-            https://github.com/kkweon/UNet-in-Tensorflow/blob/master/train.py
-        """
-        net = X - 0.5  # TODO check
+        net = X - 0.5
         net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
 
-        dropout_keep = tf.placeholder_with_default(1.0, shape=())
-        training = tf.placeholder_with_default(False, shape=())
+        num_filters = root_size
+        conv = []
 
-        conv1, pool1 = conv_conv_pool(net, [8, 8], training, name="1", dropout_keep=dropout_keep)
-        conv2, pool2 = conv_conv_pool(pool1, [16, 16], training, name="2", dropout_keep=dropout_keep)
-        conv3, pool3 = conv_conv_pool(pool2, [32, 32], training, name="3", dropout_keep=dropout_keep)
-        conv4, pool4 = conv_conv_pool(pool3, [64, 64], training, name="4", dropout_keep=dropout_keep)
-        conv5 = conv_conv_pool(pool4, [128, 128], training, name="5", pool=False, dropout_keep=dropout_keep)
+        for layer_i in range(num_layers):
+            if dropout_keep is not None:
+                net = tf.nn.dropout(net, dropout_keep)
 
-        up6 = upsample_concat(conv5, conv4, name="6")
-        conv6 = conv_conv_pool(up6, [64, 64], training, name="6", pool=False, dropout_keep=dropout_keep)
+            with tf.variable_scope("conv_{}".format(layer_i)):
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
+                net = tf.nn.relu(net, name="relu1")
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
+                net = tf.nn.relu(net, name="relu2")
 
-        up7 = upsample_concat(conv6, conv3, name="7")
-        conv7 = conv_conv_pool(up7, [32, 32], training, name="7", pool=False, dropout_keep=dropout_keep)
+            conv.append(net)
+            net = tf.layers.max_pooling2d(net, (2, 2), strides=(2, 2), name="pool")
 
-        up8 = upsample_concat(conv7, conv2, name="8")
-        conv8 = conv_conv_pool(up8, [16, 16], training, name="8", pool=False, dropout_keep=dropout_keep)
+            num_filters *= 2
 
-        up9 = upsample_concat(conv8, conv1, name="9")
-        conv9 = conv_conv_pool(up9, [8, 8], training, name="9", pool=False)
+        num_filters = int(num_filters / 2)
+        net = conv.pop()
 
-        self._dropout_keep = dropout_keep
-        self._training = training
+        for layer_i in range(num_layers - 1):
+            num_filters = int(num_filters / 2)
 
-        return tf.layers.conv2d(conv9, 2, (1, 1), name='out', padding='same')
+            if dropout_keep is not None:
+                net = tf.nn.dropout(net, dropout_keep)
+
+            with tf.variable_scope("expand_{}".format(layer_i)):
+                net = tf.layers.conv2d_transpose(net, num_filters, strides=(2, 2), kernel_size=(2, 2), name="up_conv")
+
+                traverse = conv.pop()
+                traverse = tf.image.resize_image_with_crop_or_pad(traverse, int(net.shape[1]), int(net.shape[2]))
+                net = tf.concat([traverse, net], axis=3, name="concat")
+
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
+                net = tf.nn.relu(net, name="relu1")
+                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
+                net = tf.nn.relu(net, name="relu2")
+
+        assert len(conv) == 0
+
+        net = tf.layers.conv2d(net, 2, (1, 1), padding='same', name="weight_output")
+
+        return net
 
     def cross_entropy_loss(self, labels, pred_logits):
         batch_size, patch_height, patch_width = labels.shape
 
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=tf.reshape(pred_logits, (batch_size * patch_height * patch_width, 2)),
-            labels=tf.reshape(labels, (batch_size * patch_height * patch_width,)))
+            logits=pred_logits,
+            labels=labels)
         loss = tf.reduce_mean(cross_entropy)
 
         return loss
@@ -144,10 +148,13 @@ class ConvolutionalModel:
         """Build the graph to optimize the loss function."""
         opts = self._options
 
+        learning_rate = tf.train.exponential_decay(opts.lr, self._global_step,
+                                                   1000, 0.95, staircase=True)
+
         # Use simple momentum for the optimization.
-        optimizer = tf.train.AdamOptimizer(learning_rate=opts.lr)
+        optimizer = tf.train.MomentumOptimizer(learning_rate, opts.momentum)
         train = optimizer.minimize(loss, global_step=self._global_step)
-        return train
+        return train, learning_rate
 
     def image_summary(self):
         opts = self._options
@@ -181,19 +188,20 @@ class ConvolutionalModel:
 
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
-                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size, NUM_CHANNELS))
+                                      shape=(opts.batch_size, self.input_size, self.input_size, NUM_CHANNELS))
         labels_node = tf.placeholder(tf.int64,
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
-        predict_logits = self.make_unet(patches_node)
+        predict_logits = self.make_unet(patches_node, root_size=opts.root_size, num_layers=opts.num_layers)
         predictions = tf.nn.softmax(predict_logits, dim=3)
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
-        self.add_metrics_summary(labels_node, predictions)
+        # self.add_metrics_summary(labels_node, predictions)
 
-        self._train = self.optimize(loss)
+        self._train, self._learning_rate = self.optimize(loss)
         self.summary_ops.append(tf.summary.scalar("loss", loss))
+        self.summary_ops.append(tf.summary.scalar("learning_rate", self._learning_rate))
 
         self._loss = loss
         self._predictions = predictions
@@ -215,6 +223,7 @@ class ConvolutionalModel:
 
     def add_metrics_summary(self, labels, predictions):
         """add accuracy, precision, recall, f1_score to tensorboard"""
+        # TODO does not work
         flat_labels = tf.layers.flatten(labels)
         flat_predictions = tf.layers.flatten(predictions)
         accuracy = tf.metrics.accuracy(labels=flat_labels, predictions=flat_predictions)[1]
@@ -237,7 +246,10 @@ class ConvolutionalModel:
         opts = self._options
 
         patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
-        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
+        patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
+
+        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride,
+                                                augmented=opts.image_augmentation)
         labels_patches = (labels_patches >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
@@ -254,7 +266,6 @@ class ConvolutionalModel:
                 self._patches_node: patches[batch_indices, :, :, :],
                 self._labels_node: labels_patches[batch_indices],
                 self._dropout_keep: opts.dropout,
-                self._training: False,  # TODO
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
@@ -307,6 +318,7 @@ class ConvolutionalModel:
         print("Running prediction on {} images... ".format(num_images), end="")
 
         patches = images.extract_patches(imgs, opts.patch_size, opts.stride)
+        patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
         num_patches = patches.shape[0]
         num_channel = imgs.shape[3]
 
@@ -395,7 +407,7 @@ def main(_):
                 print("==== Train epoch: {} ====".format(i))
                 tf.local_variables_initializer().run()  # Reset scores
                 model.train(train_images, train_groundtruth)  # Process one epoch
-                model.save(i)  # Save model to disk
+                # model.save(i)  # Save model to disk
 
         if opts.eval_data_dir:
             print("Running inference on eval data {}".format(opts.eval_data_dir))
@@ -409,6 +421,18 @@ def main(_):
 
         if opts.interactive:
             code.interact(local=locals())
+
+
+def input_size_needed(output_size, num_layers):
+    for i in range(num_layers - 1):
+        assert output_size % 2 == 0, 'expand layer {} has size {} not divisible by 2' \
+            .format(num_layers - i, output_size)
+        output_size = (output_size + 4) / 2
+
+    for i in range(num_layers - 1):
+        output_size = (output_size + 4) * 2
+
+    return int(output_size + 4)
 
 
 if __name__ == '__main__':

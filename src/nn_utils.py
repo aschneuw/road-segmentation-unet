@@ -5,7 +5,7 @@ def conv_conv_pool(input_, n_filters, training, name, dropout_keep=None, pool=Tr
     """{Conv -> BN -> RELU}x2 -> {Pool, optional}
     Args:
         input_ (4-D Tensor): (batch_size, H, W, C)
-        n_filters (list): number of filters [int, int]
+        n_filters: number of filters [int, int] ATTENTION GIVE ONE, MAKE ALWAYS 2
         training (1-D Tensor): Boolean Tensor
         name (str): name postfix
         dropout_keep (var):
@@ -16,6 +16,7 @@ def conv_conv_pool(input_, n_filters, training, name, dropout_keep=None, pool=Tr
         pool (optional): output of the max pooling operations
     """
     net = tf.nn.dropout(input_, dropout_keep) if dropout_keep is not None else input_
+    n_filters = 2 * [n_filters]
 
     with tf.variable_scope("conv{}".format(name)):
         for i, F in enumerate(n_filters):

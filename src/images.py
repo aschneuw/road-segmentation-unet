@@ -4,7 +4,6 @@ import os
 import matplotlib.image as mpimg
 import numpy as np
 from PIL import Image
-from scipy.stats import mode
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
@@ -76,6 +75,7 @@ def extract_patches(images, patch_size, stride=None, augmented=False):
 
     return patches
 
+
 def labels_for_patches(patches):
     """Compute the label for a some patches
     Change FOREGROUND_THRESHOLD to modify the ratio for positive/negative
@@ -90,17 +90,14 @@ def labels_for_patches(patches):
     return foreground.astype(np.int64)
 
 
-def overlays(imgs, masks, fade=0.2):
+def overlays(imgs, masks, fade=0.95):
     """Add the masks on top of the images with red transparency
-
     imgs:
         array of images
         shape: [num_images, im_height, im_width, num_channel]
-
     masks:
         array of masks
         shape: [num_images, im_height, im_width, 1]
-
     returns:
         [num_images, im_height, im_width, num_channel]
     """
@@ -110,7 +107,7 @@ def overlays(imgs, masks, fade=0.2):
     imgs = img_float_to_uint8(imgs)
     masks = img_float_to_uint8(masks.squeeze())
     masks_red = np.zeros((num_images, im_height, im_width, 4), dtype=np.uint8)
-    masks_red[:, :, :, 0] = masks
+    masks_red[:, :, :, 0] = 255
     masks_red[:, :, :, 3] = masks * fade
 
     results = np.zeros((num_images, im_width, im_height, 4), dtype=np.uint8)
@@ -157,7 +154,6 @@ def images_from_patches(patches, stride=None):
 
     return images
 
-    return images
 
 def predictions_to_patches(predictions, patch_size):
     """Expand each prediction to a square patch
@@ -256,3 +252,25 @@ def quantize_mask(masks, threshold, patch_size):
                 quantized_masks[n, y:y + patch_size, x:x + patch_size, 0] = label
 
     return quantized_masks
+
+
+def mirror_border(images, n):
+    """mirrors border n border pixels on each side and corner:
+        4D [num_images, image_height, image_width, num_channel]
+        or 3D [num_images, image_height, image_width]
+    returns:
+        4D input: [num_patches, patch_size, patch_size, num_channel]
+        3D input: [num_patches, patch_size, patch_size]
+    """
+    has_channels = (len(images.shape) == 4)
+    if not has_channels:
+        images = np.expand_dims(images, -1)
+
+    num_images, image_height, image_width, num_channel = images.shape
+
+    extended = np.pad(images, ((0,0), (n,n), (n,n), (0,0)), "symmetric")
+
+    if not has_channels:
+        extended = np.squeeze(extended, -1)
+
+    return extended
