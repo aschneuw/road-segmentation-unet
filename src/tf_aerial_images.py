@@ -158,7 +158,7 @@ class ConvolutionalModel:
         train = optimizer.minimize(loss, global_step=self._global_step)
         return train, learning_rate
 
-    def image_summary(self):
+    def eval_summary(self):
         opts = self._options
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
         self._image_summary = [tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)]
@@ -170,15 +170,38 @@ class ConvolutionalModel:
         predictions = self._eval_predictions
         labels = self._eval_labels
 
-        accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
-        recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
-        precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
-        f1_score = 2 / (1 / recall + 1 / precision)
+        accuracy, recall, precision, f1_score = self.get_prediction_metrics(labels, predictions)
+
         self._image_summary.append(tf.summary.scalar("eval accuracy", accuracy))
         self._image_summary.append(tf.summary.scalar("eval recall", recall))
         self._image_summary.append(tf.summary.scalar("eval precision", precision))
         self._image_summary.append(tf.summary.scalar("eval f1_score", f1_score))
         self._image_summary = tf.summary.merge(self._image_summary)
+
+    def train_summary(self):
+        opts = self._options
+        self._train_predictions = tf.placeholder(tf.int64, name="train_predictions")
+        self._train_labels = tf.placeholder(tf.int64, name="train_labels")
+
+        predictions = self._train_predictions
+        labels = self._train_labels
+
+        accuracy, recall, precision, f1_score = self.get_prediction_metrics(labels, predictions)
+
+        self._train_summary = [tf.summary.scalar("train accuracy", accuracy)]
+        self._train_summary.append(tf.summary.scalar("train recall", recall))
+        self._train_summary.append(tf.summary.scalar("train precision", precision))
+        self._train_summary.append(tf.summary.scalar("train f1_score", f1_score))
+        self._train_summary = tf.summary.merge(self._train_summary)
+
+
+    def get_prediction_metrics(self, labels, predictions):
+        accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
+        recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
+        precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
+        f1_score = 2 / (1 / recall + 1 / precision)
+
+        return (accuracy, recall, precision, f1_score)
 
     def build_graph(self):
         """Build the graph for the full model."""
@@ -199,8 +222,6 @@ class ConvolutionalModel:
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
-        # self.add_metrics_summary(labels_node, predictions)
-
         self._train, self._learning_rate = self.optimize(loss)
         self.summary_ops.append(tf.summary.scalar("loss", loss))
         self.summary_ops.append(tf.summary.scalar("learning_rate", self._learning_rate))
@@ -211,7 +232,9 @@ class ConvolutionalModel:
         self._labels_node = labels_node
         self._predict_logits = predict_logits
 
-        self.image_summary()
+        self.eval_summary()
+        self.train_summary()
+
         self.summary_op = tf.summary.merge(self.summary_ops)
 
         self._missclassification_rate = tf.placeholder(tf.float64, name='misclassification_rate')
@@ -223,20 +246,6 @@ class ConvolutionalModel:
 
         self.saver = tf.train.Saver()
 
-    def add_metrics_summary(self, labels, predictions):
-        """add accuracy, precision, recall, f1_score to tensorboard"""
-        # TODO does not work
-        flat_labels = tf.layers.flatten(labels)
-        flat_predictions = tf.layers.flatten(predictions)
-        accuracy = tf.metrics.accuracy(labels=flat_labels, predictions=flat_predictions)[1]
-        recall = tf.metrics.recall(labels=flat_labels, predictions=flat_predictions)[1]
-        precision = tf.metrics.precision(labels=flat_labels, predictions=flat_predictions)[1]
-        f1_score = 2 / (1 / recall + 1 / precision)
-
-        self.summary_ops.append(tf.summary.scalar("accuracy", accuracy))
-        self.summary_ops.append(tf.summary.scalar("recall", recall))
-        self.summary_ops.append(tf.summary.scalar("precision", precision))
-        self.summary_ops.append(tf.summary.scalar("f1_score", f1_score))
 
     def train(self, imgs, labels):
         """Train the model for one epoch
@@ -288,29 +297,33 @@ class ConvolutionalModel:
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
 
-                feed_predictions = images.extract_patches(masks, IMG_PATCH_SIZE)
-                feed_predictions = images.labels_for_patches(feed_predictions)
-                feed_predictions.resize((opts.num_eval_images, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
-
-                feed_labels = labels[:opts.num_eval_images, :, :]
-                feed_labels = images.extract_patches(feed_labels, IMG_PATCH_SIZE)
-                feed_labels = images.labels_for_patches(feed_labels)
-                feed_labels.resize((opts.num_eval_images, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
+                # eval summary
+                eval_predictions = self.img_to_label_patches(masks)
+                eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
 
                 feed_dict_eval = {
                     self._images_to_display: overlays,
-                    self._eval_predictions: feed_predictions,
-                    self._eval_labels: feed_labels
+                    self._eval_predictions: eval_predictions,
+                    self._eval_labels: eval_labels
                 }
 
-                final_f_score = self.training_final_f_score(imgs, labels)
-                print("patch_f_training_score:{}".format(final_f_score))
-                #self.add_value_to_summary("training_patch_f1", step, final_f_score)
-
-                # display in summary
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
                                                     feed_dict=feed_dict_eval)
                 self.summary_writer.add_summary(image_sum, global_step=step)
+
+                # train summary
+                train_predictions = self.img_to_label_patches(self.predict(imgs))
+                train_labels = self.img_to_label_patches(labels)
+
+                feed_dict_train = {
+                    self._train_predictions: train_predictions,
+                    self._train_labels: train_labels
+                }
+
+                train_sum, step = self._session.run([self._train_summary, self._global_step],
+                        feed_dict=feed_dict_train)
+                self.summary_writer.add_summary(train_sum, global_step=step)
+
         print()
 
         # save the missclassification rate over the epoch
@@ -319,22 +332,13 @@ class ConvolutionalModel:
         self.summary_writer.add_summary(misclassification, global_step=step)
         self.summary_writer.flush()
 
-    def training_final_f_score(self, imgs, labels, patch_size=16):
-        masks_pred = (self.predict(imgs) > 0.5) * 1
-        masks_true = labels
+    def img_to_label_patches(self, img, patch_size=IMG_PATCH_SIZE):
+        opts = self._options
+        img = images.extract_patches(img, patch_size)
+        img = images.labels_for_patches(img)
+        img.resize((img.shape[0], patch_size, patch_size))
 
-        pred_patches = images.extract_patches(masks_pred, patch_size)
-        pred_labels = images.labels_for_patches(pred_patches).flatten()
-
-        true_patches = images.extract_patches(masks_true, patch_size)
-        true_labels = images.labels_for_patches(true_patches).flatten()
-
-        accuracy = tf.metrics.accuracy(labels=true_labels, predictions=pred_labels)[1]
-        recall = tf.metrics.recall(labels=true_labels, predictions=pred_labels)[1]
-        precision = tf.metrics.precision(labels=true_labels, predictions=pred_labels)[1]
-        f1_score = 2 / (1 / recall + 1 / precision)
-
-        return f1_score
+        return img
 
     def add_value_to_summary(self, name, step, y):
         summary = tf.Summary()
