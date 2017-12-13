@@ -118,6 +118,7 @@ def overlays(imgs, masks, fade=0.95):
 
     return results
 
+
 def images_from_patches(patches, stride=None):
     """Transform a list of patches into images
 
