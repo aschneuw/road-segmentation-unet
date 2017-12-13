@@ -34,6 +34,7 @@ tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set o
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
 tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-Net layer")
 tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
+tf.app.flags.DEFINE_integer('train_score_every', 1000, "Compute training score after the given number of iterations")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -64,6 +65,7 @@ class Options(object):
         self.dropout = FLAGS.dropout
         self.num_layers = FLAGS.num_layers
         self.root_size = FLAGS.root_size
+        self.train_score_every = FLAGS.train_score_every
 
 
 class ConvolutionalModel:
@@ -262,6 +264,7 @@ class ConvolutionalModel:
 
         labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride,
                                                 augmented=opts.image_augmentation)
+
         labels_patches = (labels_patches >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
@@ -290,48 +293,60 @@ class ConvolutionalModel:
 
             num_errors += np.abs(labels_patches[batch_indices] - predictions).sum()
             total += opts.batch_size
+            self.pixel_missclassification_summary(num_errors, total)
 
             # from time to time do full prediction on some images
             if step > 0 and step % opts.eval_every == 0:
                 print()
-                images_to_predict = imgs[:opts.num_eval_images, :, :, :]
-                masks = self.predict(images_to_predict)
-                overlays = images.overlays(images_to_predict, masks)
+                self.add_to_eval_summary(imgs, labels)
 
-                # eval summary
-                eval_predictions = self.img_to_label_patches(masks)
-                eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
+            if step > 0 and step % opts.train_score_every == 0:
+                print()
+                self.add_to_training_summary(imgs, labels)
 
-                feed_dict_eval = {
-                    self._images_to_display: overlays,
-                    self._eval_predictions: eval_predictions,
-                    self._eval_labels: eval_labels
-                }
+        self.summary_writer.flush()
 
-                image_sum, step = self._session.run([self._image_summary, self._global_step],
-                                                    feed_dict=feed_dict_eval)
-                self.summary_writer.add_summary(image_sum, global_step=step)
-
-                # train summary
-                train_predictions = self.img_to_label_patches(self.predict(imgs))
-                train_labels = self.img_to_label_patches(labels)
-
-                feed_dict_train = {
-                    self._train_predictions: train_predictions,
-                    self._train_labels: train_labels
-                }
-
-                train_sum, step = self._session.run([self._train_summary, self._global_step],
-                        feed_dict=feed_dict_train)
-                self.summary_writer.add_summary(train_sum, global_step=step)
-
-        print()
-
-        # save the missclassification rate over the epoch
+    def pixel_missclassification_summary(self, num_errors, total):
         misclassification, step = self._session.run([self.misclassification_summary, self._global_step],
                                                     feed_dict={self._missclassification_rate: num_errors / total})
         self.summary_writer.add_summary(misclassification, global_step=step)
-        self.summary_writer.flush()
+
+
+    def add_to_eval_summary(self, imgs, labels):
+        opts = self._options
+
+        images_to_predict = imgs[:opts.num_eval_images, :, :, :]
+        masks = self.predict(images_to_predict)
+        overlays = images.overlays(images_to_predict, masks)
+
+        # eval summary
+        eval_predictions = self.img_to_label_patches(masks)
+        eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
+
+        feed_dict_eval = {
+            self._images_to_display: overlays,
+            self._eval_predictions: eval_predictions,
+            self._eval_labels: eval_labels
+        }
+
+        image_sum, step = self._session.run([self._image_summary, self._global_step],
+                                            feed_dict=feed_dict_eval)
+        self.summary_writer.add_summary(image_sum, global_step=step)
+
+
+    def add_to_training_summary(self, imgs, labels):
+        train_predictions = self.img_to_label_patches(self.predict(imgs))
+        train_labels = self.img_to_label_patches(labels)
+
+        feed_dict_train = {
+            self._train_predictions: train_predictions,
+            self._train_labels: train_labels
+        }
+
+        train_sum, step = self._session.run([self._train_summary, self._global_step],
+                                            feed_dict=feed_dict_train)
+        self.summary_writer.add_summary(train_sum, global_step=step)
+
 
     def img_to_label_patches(self, img, patch_size=IMG_PATCH_SIZE):
         opts = self._options
