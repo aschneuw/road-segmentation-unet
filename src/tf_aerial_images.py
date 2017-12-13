@@ -28,6 +28,7 @@ tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluati
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
 tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
 tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
+tf.app.flags.DEFINE_integer('num_gpu', 1, "Number of available GPUs to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
@@ -58,6 +59,7 @@ class Options(object):
         self.patch_size = FLAGS.patch_size
         self.stride = FLAGS.stride
         self.gpu = FLAGS.gpu
+        self.num_gpu = FLAGS.num_gpu
         self.image_augmentation = FLAGS.image_augmentation
         self.dropout = FLAGS.dropout
         self.num_layers = FLAGS.num_layers
@@ -388,7 +390,7 @@ def main(_):
     if opts.gpu == -1:
         config = tf.ConfigProto()
     else:
-        config = tf.ConfigProto(device_count={'GPU': opts.gpu}, allow_soft_placement=True)
+        config = tf.ConfigProto(device_count={'GPU': opts.num_gpu}, allow_soft_placement=True)
 
     with tf.Graph().as_default(), tf.Session(config=config) as session:
         device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
