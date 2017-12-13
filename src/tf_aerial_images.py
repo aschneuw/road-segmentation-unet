@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
-from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
+from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD, IMAGE_WIDTH, IMAGE_HEIGHT
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write checkpoints, overlays and submissions")
@@ -28,6 +28,7 @@ tf.app.flags.DEFINE_integer('eval_every', 500, "Number of steps between evaluati
 tf.app.flags.DEFINE_integer('num_eval_images', 4, "Number of images to predict for an evaluation")
 tf.app.flags.DEFINE_integer('patch_size', 128, "Size of the prediction image")
 tf.app.flags.DEFINE_integer('gpu', -1, "GPU to run the model on")
+tf.app.flags.DEFINE_integer('num_gpu', 1, "Number of available GPUs to run the model on")
 tf.app.flags.DEFINE_integer('stride', 16, "Sliding delta for patches")
 tf.app.flags.DEFINE_boolean('image_augmentation', False, "Augment training set of images with transformations")
 tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
@@ -58,6 +59,7 @@ class Options(object):
         self.patch_size = FLAGS.patch_size
         self.stride = FLAGS.stride
         self.gpu = FLAGS.gpu
+        self.num_gpu = FLAGS.num_gpu
         self.image_augmentation = FLAGS.image_augmentation
         self.dropout = FLAGS.dropout
         self.num_layers = FLAGS.num_layers
@@ -157,10 +159,50 @@ class ConvolutionalModel:
         train = optimizer.minimize(loss, global_step=self._global_step)
         return train, learning_rate
 
-    def image_summary(self):
+    def eval_summary(self):
         opts = self._options
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
-        self._image_summary = tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)
+        self._image_summary = [tf.summary.image('samples', self._images_to_display, max_outputs=opts.num_eval_images)]
+
+        # eval data placeholders
+        self._eval_predictions = tf.placeholder(tf.int64, name="eval_predictions")
+        self._eval_labels = tf.placeholder(tf.int64, name="eval_labels")
+
+        predictions = self._eval_predictions
+        labels = self._eval_labels
+
+        accuracy, recall, precision, f1_score = self.get_prediction_metrics(labels, predictions)
+
+        self._image_summary.append(tf.summary.scalar("eval accuracy", accuracy))
+        self._image_summary.append(tf.summary.scalar("eval recall", recall))
+        self._image_summary.append(tf.summary.scalar("eval precision", precision))
+        self._image_summary.append(tf.summary.scalar("eval f1_score", f1_score))
+        self._image_summary = tf.summary.merge(self._image_summary)
+
+    def train_summary(self):
+        opts = self._options
+        self._train_predictions = tf.placeholder(tf.int64, name="train_predictions")
+        self._train_labels = tf.placeholder(tf.int64, name="train_labels")
+
+        predictions = self._train_predictions
+        labels = self._train_labels
+
+        accuracy, recall, precision, f1_score = self.get_prediction_metrics(labels, predictions)
+
+        self._train_summary = [tf.summary.scalar("train accuracy", accuracy)]
+        self._train_summary.append(tf.summary.scalar("train recall", recall))
+        self._train_summary.append(tf.summary.scalar("train precision", precision))
+        self._train_summary.append(tf.summary.scalar("train f1_score", f1_score))
+        self._train_summary = tf.summary.merge(self._train_summary)
+
+
+    def get_prediction_metrics(self, labels, predictions):
+        accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
+        recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
+        precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
+        f1_score = 2 / (1 / recall + 1 / precision)
+
+        return (accuracy, recall, precision, f1_score)
 
     def build_graph(self):
         """Build the graph for the full model."""
@@ -181,8 +223,6 @@ class ConvolutionalModel:
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
 
-        # self.add_metrics_summary(labels_node, predictions)
-
         self._train, self._learning_rate = self.optimize(loss)
         self.summary_ops.append(tf.summary.scalar("loss", loss))
         self.summary_ops.append(tf.summary.scalar("learning_rate", self._learning_rate))
@@ -193,7 +233,9 @@ class ConvolutionalModel:
         self._labels_node = labels_node
         self._predict_logits = predict_logits
 
-        self.image_summary()
+        self.eval_summary()
+        self.train_summary()
+
         self.summary_op = tf.summary.merge(self.summary_ops)
 
         self._missclassification_rate = tf.placeholder(tf.float64, name='misclassification_rate')
@@ -205,20 +247,6 @@ class ConvolutionalModel:
 
         self.saver = tf.train.Saver()
 
-    def add_metrics_summary(self, labels, predictions):
-        """add accuracy, precision, recall, f1_score to tensorboard"""
-        # TODO does not work
-        flat_labels = tf.layers.flatten(labels)
-        flat_predictions = tf.layers.flatten(predictions)
-        accuracy = tf.metrics.accuracy(labels=flat_labels, predictions=flat_predictions)[1]
-        recall = tf.metrics.recall(labels=flat_labels, predictions=flat_predictions)[1]
-        precision = tf.metrics.precision(labels=flat_labels, predictions=flat_predictions)[1]
-        f1_score = 2 / (1 / recall + 1 / precision)
-
-        self.summary_ops.append(tf.summary.scalar("accuracy", accuracy))
-        self.summary_ops.append(tf.summary.scalar("recall", recall))
-        self.summary_ops.append(tf.summary.scalar("precision", precision))
-        self.summary_ops.append(tf.summary.scalar("f1_score", f1_score))
 
     def train(self, imgs, labels):
         """Train the model for one epoch
@@ -270,10 +298,33 @@ class ConvolutionalModel:
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
 
-                # display in summary
+                # eval summary
+                eval_predictions = self.img_to_label_patches(masks)
+                eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
+
+                feed_dict_eval = {
+                    self._images_to_display: overlays,
+                    self._eval_predictions: eval_predictions,
+                    self._eval_labels: eval_labels
+                }
+
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
-                                                    feed_dict={self._images_to_display: overlays})
+                                                    feed_dict=feed_dict_eval)
                 self.summary_writer.add_summary(image_sum, global_step=step)
+
+                # train summary
+                train_predictions = self.img_to_label_patches(self.predict(imgs))
+                train_labels = self.img_to_label_patches(labels)
+
+                feed_dict_train = {
+                    self._train_predictions: train_predictions,
+                    self._train_labels: train_labels
+                }
+
+                train_sum, step = self._session.run([self._train_summary, self._global_step],
+                        feed_dict=feed_dict_train)
+                self.summary_writer.add_summary(train_sum, global_step=step)
+
         print()
 
         # save the missclassification rate over the epoch
@@ -281,6 +332,19 @@ class ConvolutionalModel:
                                                     feed_dict={self._missclassification_rate: num_errors / total})
         self.summary_writer.add_summary(misclassification, global_step=step)
         self.summary_writer.flush()
+
+    def img_to_label_patches(self, img, patch_size=IMG_PATCH_SIZE):
+        opts = self._options
+        img = images.extract_patches(img, patch_size)
+        img = images.labels_for_patches(img)
+        img.resize((img.shape[0], patch_size, patch_size))
+
+        return img
+
+    def add_value_to_summary(self, name, step, y):
+        summary = tf.Summary()
+        summary.value.add(tag=name, simple_value=y)
+        self.summary_writer.add_summary(summary, global_step=step)
 
     def predict(self, imgs):
         """Run inference on `imgs` and return predicted masks
@@ -364,7 +428,7 @@ def main(_):
     if opts.gpu == -1:
         config = tf.ConfigProto()
     else:
-        config = tf.ConfigProto(device_count={'GPU': opts.gpu}, allow_soft_placement=True)
+        config = tf.ConfigProto(device_count={'GPU': opts.num_gpu}, allow_soft_placement=True)
 
     with tf.Graph().as_default(), tf.Session(config=config) as session:
         device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
