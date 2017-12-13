@@ -288,8 +288,14 @@ class ConvolutionalModel:
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
 
-                feed_predictions = (np.squeeze(masks) >= 0.5) * 1
-                feed_labels = (labels[:opts.num_eval_images, :, :] >= 0.5) * 1
+                feed_predictions = images.extract_patches(masks, IMG_PATCH_SIZE)
+                feed_predictions = images.labels_for_patches(feed_predictions)
+                feed_predictions.resize((opts.num_eval_images, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
+
+                feed_labels = labels[:opts.num_eval_images, :, :]
+                feed_labels = images.extract_patches(feed_labels, IMG_PATCH_SIZE)
+                feed_labels = images.labels_for_patches(feed_labels)
+                feed_labels.resize((opts.num_eval_images, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
 
                 feed_dict_eval = {
                     self._images_to_display: overlays,
