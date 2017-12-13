@@ -248,7 +248,7 @@ def quantize_mask(masks, threshold, patch_size):
     for n in range(num_images):
         for y in range(0, img_size, patch_size):
             for x in range(0, img_size, patch_size):
-                label = masks[n, y:y + patch_size, x:x + patch_size, 0].mean() > threshold
+                label = (masks[n, y:y + patch_size, x:x + patch_size, 0] >= 0.5).mean() > threshold
                 quantized_masks[n, y:y + patch_size, x:x + patch_size, 0] = label
 
     return quantized_masks
