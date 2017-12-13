@@ -286,7 +286,7 @@ class ConvolutionalModel:
         self.summary_writer.flush()
 
     def training_final_f_score(self, imgs, labels, patch_size=16):
-        masks_pred = self.predict(imgs) > 0.5
+        masks_pred = (self.predict(imgs) > 0.5) * 1
         masks_true = labels
 
         pred_patches = images.extract_patches(masks_pred, patch_size)
