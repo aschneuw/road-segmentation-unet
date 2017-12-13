@@ -327,7 +327,7 @@ class ConvolutionalModel:
         eval_labels = self.img_to_label_patches(labels[:opts.num_eval_images, :, :])
 
         feed_dict_eval = {
-            self._masks_to_display: masks,
+            self._masks_to_display: images.img_float_to_uint8(masks),
             self._images_to_display: overlays,
             self._eval_predictions: eval_predictions,
             self._eval_labels: eval_labels
