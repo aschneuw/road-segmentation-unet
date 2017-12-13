@@ -269,6 +269,9 @@ class ConvolutionalModel:
                 masks = self.predict(images_to_predict)
                 overlays = images.overlays(images_to_predict, masks)
 
+                final_f_score = self.training_final_f_score(imgs, labels)
+                self.add_value_to_summary("training_patch_f1", step, final_f_score)
+
                 # display in summary
                 image_sum, step = self._session.run([self._image_summary, self._global_step],
                                                     feed_dict={self._images_to_display: overlays})
@@ -280,6 +283,28 @@ class ConvolutionalModel:
                                                     feed_dict={self._missclassification_rate: num_errors / total})
         self.summary_writer.add_summary(misclassification, global_step=step)
         self.summary_writer.flush()
+
+    def training_final_f_score(self, imgs, labels, patch_size=16):
+        masks_pred = self.predict(imgs) > 0.5
+        masks_true = labels
+
+        pred_patches = images.extract_patches(masks_pred, patch_size)
+        pred_labels = images.labels_for_patches(pred_patches).flatten()
+
+        true_patches = images.extract_patches(masks_true, patch_size)
+        true_labels = images.labels_for_patches(true_patches).flatten()
+
+        accuracy = tf.metrics.accuracy(labels=true_labels, predictions=pred_labels)[1]
+        recall = tf.metrics.recall(labels=true_labels, predictions=pred_labels)[1]
+        precision = tf.metrics.precision(labels=true_labels, predictions=pred_labels)[1]
+        f1_score = 2 / (1 / recall + 1 / precision)
+
+        return f1_score
+
+    def add_value_to_summary(self, name, step, y):
+        summary = tf.Summary()
+        summary.value.add(tag=name, simple_value=y)
+        self.summary_writer.add_summary(summary, global_step=step)
 
     def predict(self, imgs):
         """Run inference on `imgs` and return predicted masks
