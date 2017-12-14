@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 
 import images
+import unet
 from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD, IMAGE_WIDTH, IMAGE_HEIGHT
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
@@ -88,59 +89,6 @@ class ConvolutionalModel:
         experiment_path = os.path.abspath(os.path.join(options.save_path, self.experiment_name))
         summary_path = os.path.join(options.log_dir, self.experiment_name)
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
-
-    def make_unet(self, X, num_layers, root_size):
-        dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
-        self._dropout_keep = dropout_keep
-
-        net = X - 0.5
-        net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
-
-        num_filters = root_size
-        conv = []
-
-        for layer_i in range(num_layers):
-            if dropout_keep is not None:
-                net = tf.nn.dropout(net, dropout_keep)
-
-            with tf.variable_scope("conv_{}".format(layer_i)):
-                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
-                net = tf.nn.relu(net, name="relu1")
-                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
-                net = tf.nn.relu(net, name="relu2")
-
-            conv.append(net)
-            net = tf.layers.max_pooling2d(net, (2, 2), strides=(2, 2), name="pool")
-
-            num_filters *= 2
-
-        num_filters = int(num_filters / 2)
-        net = conv.pop()
-
-        for layer_i in range(num_layers - 1):
-            num_filters = int(num_filters / 2)
-
-            if dropout_keep is not None:
-                net = tf.nn.dropout(net, dropout_keep)
-
-            net = tf.layers.conv2d_transpose(net, num_filters, strides=(2, 2), kernel_size=(2, 2), name="up_conv_{}".format(layer_i))
-
-            traverse = conv.pop()
-            with tf.variable_scope("crop_{}".format(num_layers - layer_i)):
-                traverse = tf.image.resize_image_with_crop_or_pad(traverse, int(net.shape[1]), int(net.shape[2]))
-            net = tf.concat([traverse, net], axis=3, name="concat")
-
-            with tf.variable_scope("conv_{}".format(num_layers + layer_i)):
-                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
-                net = tf.nn.relu(net, name="relu1")
-                net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
-                net = tf.nn.relu(net, name="relu2")
-
-        assert len(conv) == 0
-
-        net = tf.layers.conv2d(net, 2, (1, 1), padding='same', name="weight_output")
-
-        return net
 
     def cross_entropy_loss(self, labels, pred_logits):
         batch_size, patch_height, patch_width = labels.shape
@@ -242,7 +190,7 @@ class ConvolutionalModel:
         labels_node = tf.placeholder(tf.int64,
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size))
 
-        predict_logits = self.make_unet(patches_node, root_size=opts.root_size, num_layers=opts.num_layers)
+        predict_logits = unet.forward(patches_node, root_size=opts.root_size, num_layers=opts.num_layers)
         predictions = tf.nn.softmax(predict_logits, dim=3)
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
