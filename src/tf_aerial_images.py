@@ -428,15 +428,9 @@ def main(_):
         config = tf.ConfigProto(device_count={'GPU': opts.num_gpu}, allow_soft_placement=True)
 
     with tf.Graph().as_default(), tf.Session(config=config) as session:
-        if opts.gpu != -2:
-            device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
-            print("Running on device {}".format(device))
-            with tf.device(device):
-                # specific assignment
-                model = ConvolutionalModel(opts, session)
-
-        else:
-            # Random Assignment
+        device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
+        print("Running on device {}".format(device))
+        with tf.device(device):
             model = ConvolutionalModel(opts, session)
 
         if opts.restore_model:
