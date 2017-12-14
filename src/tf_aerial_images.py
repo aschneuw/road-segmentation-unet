@@ -35,6 +35,7 @@ tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
 tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-Net layer")
 tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
 tf.app.flags.DEFINE_integer('train_score_every', 1000, "Compute training score after the given number of iterations")
+tf.app.flags.DEFINE_integer('rotate_45', True, "45 degree rotation of loaded images")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -66,6 +67,7 @@ class Options(object):
         self.num_layers = FLAGS.num_layers
         self.root_size = FLAGS.root_size
         self.train_score_every = FLAGS.train_score_every
+        self.rotate_45 = FLAGS.rotate_45
 
 
 class ConvolutionalModel:
@@ -494,7 +496,7 @@ def main(_):
             model.restore(date=opts.restore_date)
 
         if opts.num_epoch > 0:
-            train_images, train_groundtruth = images.load_train_data(opts.train_data_dir, opts.patch_size)
+            train_images, train_groundtruth = load_data(opts.train_data_dir, opts.patch_size, opts.rotate_45)
             model.generate_eval_patch_summary(train_groundtruth)
             for i in range(opts.num_epoch):
                 print("==== Train epoch: {} ====".format(i))
@@ -515,6 +517,20 @@ def main(_):
         if opts.interactive:
             code.interact(local=locals())
 
+def load_data(data_dir, patch_size, rotate_45=True):
+    '''
+    :param self:
+    :return:
+    '''
+    train_images, train_groundtruth = images.load_train_data(data_dir, patch_size)
+
+    if rotate_45 == True:
+        rot_train_images = images.mirror_rotate_45_crop(train_images)
+        rot_train_groundtruth = images.mirror_rotate_45_crop(train_groundtruth)
+        train_images = np.concatenate((train_images, rot_train_images))
+        train_groundtruth = np.concatenate((train_groundtruth, rot_train_groundtruth))
+
+    return train_images, train_groundtruth
 
 def input_size_needed(output_size, num_layers):
     for i in range(num_layers - 1):

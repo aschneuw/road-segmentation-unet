@@ -4,6 +4,7 @@ import os
 import matplotlib.image as mpimg
 import numpy as np
 from PIL import Image
+from scipy.ndimage.interpolation import rotate
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
@@ -287,3 +288,38 @@ def overlap_pred_true(pred, true):
 
     return overlapped_mask
 
+
+def mirror_rotate_45_crop(img):
+    has_channels = (len(img.shape) == 4)
+    if not has_channels:
+        img = np.expand_dims(img, -1)
+
+    #consistency check
+    num_imgs, img_length, img_width, num_channel = img.shape
+    assert img_length == img_width
+
+    # mirror and extend
+    ext_size = int(np.ceil(img_length * (np.sqrt(2) - 1) / 2))
+    extended_img = mirror_border(img, ext_size)
+
+    # rotate
+    rot = rotate(extended_img, angle=45, axes=(1, 2), order=0)
+    rot_imgs, rot_length, rot_width, num_channel = rot.shape
+    assert rot_length == rot_width
+
+    # crop
+    margin = (rot_length - img_length) / 2
+    assert margin % 1 == 0
+    margin = int(margin)
+
+    rot_s = rot[:, margin:-margin, margin:-margin, :]
+    rot_s_imgs, rot_s_length, rot_s_width, rot_s_num_channel = rot_s.shape
+
+    #consistency check
+    assert rot_s_length == img_length
+    assert rot_s_width == img_width
+
+    if not has_channels:
+        rot_s = np.squeeze(rot_s, -1)
+
+    return rot_s
