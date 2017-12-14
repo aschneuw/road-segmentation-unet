@@ -123,13 +123,14 @@ class ConvolutionalModel:
             if dropout_keep is not None:
                 net = tf.nn.dropout(net, dropout_keep)
 
-            with tf.variable_scope("expand_{}".format(layer_i)):
-                net = tf.layers.conv2d_transpose(net, num_filters, strides=(2, 2), kernel_size=(2, 2), name="up_conv")
+            net = tf.layers.conv2d_transpose(net, num_filters, strides=(2, 2), kernel_size=(2, 2), name="up_conv_{}".format(layer_i))
 
-                traverse = conv.pop()
+            traverse = conv.pop()
+            with tf.variable_scope("crop_{}".format(num_layers - layer_i)):
                 traverse = tf.image.resize_image_with_crop_or_pad(traverse, int(net.shape[1]), int(net.shape[2]))
-                net = tf.concat([traverse, net], axis=3, name="concat")
+            net = tf.concat([traverse, net], axis=3, name="concat")
 
+            with tf.variable_scope("conv_{}".format(num_layers + layer_i)):
                 net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")
                 net = tf.nn.relu(net, name="relu1")
                 net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv2")
@@ -508,7 +509,7 @@ def main(_):
             eval_images = images.load(opts.eval_data_dir)
             masks = model.predict(eval_images)
             masks = images.quantize_mask(masks, patch_size=IMG_PATCH_SIZE, threshold=FOREGROUND_THRESHOLD)
-            overlays = images.overlays(eval_images, masks)
+            overlays = images.overlays(eval_images, masks, fade=0.4)
             save_dir = os.path.abspath(os.path.join(opts.save_path, model.experiment_name))
             images.save_all(overlays, save_dir)
             images.save_submission_csv(masks, save_dir, IMG_PATCH_SIZE)
