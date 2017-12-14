@@ -54,3 +54,15 @@ def forward(self, X, num_layers, root_size):
     net = tf.layers.conv2d(net, 2, (1, 1), padding='same', name="weight_output")
 
     return net
+
+
+def input_size_needed(output_size, num_layers):
+    for i in range(num_layers - 1):
+        assert output_size % 2 == 0, 'expand layer {} has size {} not divisible by 2' \
+            .format(num_layers - i, output_size)
+        output_size = (output_size + 4) / 2
+
+    for i in range(num_layers - 1):
+        output_size = (output_size + 4) * 2
+
+    return int(output_size + 4)

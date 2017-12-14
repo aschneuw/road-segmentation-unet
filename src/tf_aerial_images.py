@@ -8,7 +8,7 @@ import tensorflow as tf
 
 import images
 import unet
-from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD, IMAGE_WIDTH, IMAGE_HEIGHT
+from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write checkpoints, overlays and submissions")
@@ -80,7 +80,7 @@ class ConvolutionalModel:
 
         np.random.seed(options.seed)
         tf.set_random_seed(options.seed)
-        self.input_size = input_size_needed(options.patch_size, options.num_layers)
+        self.input_size = unet.input_size_needed(options.patch_size, options.num_layers)
 
         self.summary_ops = []
         self.build_graph()
@@ -115,10 +115,12 @@ class ConvolutionalModel:
     def eval_summary(self):
         opts = self._options
         self._images_to_display = tf.placeholder(tf.uint8, name="image_display")
-        self._image_summary = [tf.summary.image('eval_images', self._images_to_display, max_outputs=opts.num_eval_images)]
+        self._image_summary = [
+            tf.summary.image('eval_images', self._images_to_display, max_outputs=opts.num_eval_images)]
 
         self._masks_to_display = tf.placeholder(tf.uint8, name="mask_display")
-        self._image_summary.append(tf.summary.image('eval_masks', self._masks_to_display, max_outputs=opts.num_eval_images))
+        self._image_summary.append(
+            tf.summary.image('eval_masks', self._masks_to_display, max_outputs=opts.num_eval_images))
 
         # eval data placeholders
         self._eval_predictions = tf.placeholder(tf.int64, name="eval_predictions")
@@ -138,7 +140,8 @@ class ConvolutionalModel:
     def initialize_overlap_summary(self):
         opts = self._options
         self._overlap_images = tf.placeholder(tf.uint8, name="overlap_images")
-        self._overlap_summary = tf.summary.image('groundtruth_vs_prediction', self._overlap_images, max_outputs=opts.num_eval_images)
+        self._overlap_summary = tf.summary.image('groundtruth_vs_prediction', self._overlap_images,
+                                                 max_outputs=opts.num_eval_images)
 
     def add_to_overlap_summary(self, true_labels, predicted_labels):
         overlapped = images.overlap_pred_true(predicted_labels, true_labels)
@@ -148,7 +151,7 @@ class ConvolutionalModel:
             self._overlap_images: overlapped
         }
         overlap_summary, step = self._session.run([self._overlap_summary, self._global_step],
-                                            feed_dict=feed_dict_eval)
+                                                  feed_dict=feed_dict_eval)
         self.summary_writer.add_summary(overlap_summary, global_step=step)
 
     def train_summary(self):
@@ -167,14 +170,13 @@ class ConvolutionalModel:
         self._train_summary.append(tf.summary.scalar("train f1_score", f1_score))
         self._train_summary = tf.summary.merge(self._train_summary)
 
-
     def get_prediction_metrics(self, labels, predictions):
         accuracy = tf.metrics.accuracy(labels=labels, predictions=predictions)[1]
         recall = tf.metrics.recall(labels=labels, predictions=predictions)[1]
         precision = tf.metrics.precision(labels=labels, predictions=predictions)[1]
         f1_score = 2 / (1 / recall + 1 / precision)
 
-        return (accuracy, recall, precision, f1_score)
+        return accuracy, recall, precision, f1_score
 
     def build_graph(self):
         """Build the graph for the full model."""
@@ -219,7 +221,6 @@ class ConvolutionalModel:
         tf.local_variables_initializer().run()
 
         self.saver = tf.train.Saver()
-
 
     def train(self, imgs, labels):
         """Train the model for one epoch
@@ -329,7 +330,6 @@ class ConvolutionalModel:
                                             feed_dict=feed_dict_train)
         self.summary_writer.add_summary(train_sum, global_step=step)
 
-
     def img_to_label_patches(self, img, patch_size=IMG_PATCH_SIZE):
         opts = self._options
         img = images.extract_patches(img, patch_size)
@@ -432,11 +432,11 @@ def main(_):
             device = '/device:CPU:0' if opts.gpu == -1 else '/device:GPU:{}'.format(opts.gpu)
             print("Running on device {}".format(device))
             with tf.device(device):
-                #specific assignment
+                # specific assignment
                 model = ConvolutionalModel(opts, session)
 
         else:
-            #Random Assignment
+            # Random Assignment
             model = ConvolutionalModel(opts, session)
 
         if opts.restore_model:
@@ -464,17 +464,6 @@ def main(_):
 
         if opts.interactive:
             code.interact(local=locals())
-
-def input_size_needed(output_size, num_layers):
-    for i in range(num_layers - 1):
-        assert output_size % 2 == 0, 'expand layer {} has size {} not divisible by 2' \
-            .format(num_layers - i, output_size)
-        output_size = (output_size + 4) / 2
-
-    for i in range(num_layers - 1):
-        output_size = (output_size + 4) * 2
-
-    return int(output_size + 4)
 
 
 if __name__ == '__main__':
