@@ -1,3 +1,5 @@
+# TODO clean up useless ones
+
 FOREGROUND_THRESHOLD = .25
 IMG_PATCH_SIZE = 16
 NUM_CHANNELS = 3

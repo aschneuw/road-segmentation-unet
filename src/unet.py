@@ -1,10 +1,7 @@
 import tensorflow as tf
 
 
-def forward(self, X, num_layers, root_size):
-    dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
-    self._dropout_keep = dropout_keep
-
+def forward(X, num_layers, root_size, dropout_keep=None):
     net = X - 0.5
     net = tf.layers.conv2d(net, 3, (1, 1), name="color_space_adjust")
 
@@ -39,9 +36,9 @@ def forward(self, X, num_layers, root_size):
                                          name="up_conv_{}".format(layer_i))
 
         traverse = conv.pop()
-        with tf.variable_scope("crop_{}".format(num_layers - layer_i)):
-            traverse = tf.image.resize_image_with_crop_or_pad(traverse, int(net.shape[1]), int(net.shape[2]))
-        net = tf.concat([traverse, net], axis=3, name="concat")
+        with tf.variable_scope("crop_{}".format(layer_i)):
+            traverse_crop = tf.image.resize_image_with_crop_or_pad(traverse, int(net.shape[1]), int(net.shape[2]))
+        net = tf.concat([traverse_crop, net], axis=3, name="concat")
 
         with tf.variable_scope("conv_{}".format(num_layers + layer_i)):
             net = tf.layers.conv2d(net, num_filters, (3, 3), padding='valid', name="conv1")

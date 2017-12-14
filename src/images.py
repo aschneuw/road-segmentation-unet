@@ -25,7 +25,7 @@ def load(directory):
     return np.asarray(images)
 
 
-def extract_patches(images, patch_size, stride=None, augmented=False):
+def extract_patches(images, patch_size, stride=None):
     """extract square patches from a batch of images
     images:
         4D [num_images, image_height, image_width, num_channel]
@@ -36,18 +36,6 @@ def extract_patches(images, patch_size, stride=None, augmented=False):
         4D input: [num_patches, patch_size, patch_size, num_channel]
         3D input: [num_patches, patch_size, patch_size]
     """
-    if augmented:
-        print("Start image augmentation: {} initial images".format(images.shape[0]))
-        rotations = []
-        for k in range(0, 4):
-            rotations.append(np.rot90(images, k, axes=(1, 2)))
-        images = np.concatenate(rotations, axis=0)
-        print("After 90 degree rotations: {} images".format(images.shape[0]))
-
-        flips = [images, np.fliplr(images), np.flipud(images)]
-        images = np.concatenate(flips, axis=0)
-        print("After ud lr flips: {} images".format(images.shape[0]))
-
     if not stride:
         stride = patch_size
 
@@ -240,7 +228,7 @@ def load_train_data(directory, rot_angles=None):
     train_groundtruth = load(train_labels_dir)
 
     if rot_angles:
-        print("Applying rotations: {} degrees.".format(",".join(str(a) for a in rot_angles)))
+        print("Applying rotations: {} degrees.".format(", ".join(str(a) for a in rot_angles)))
         rot_train_images = mirror_rotate(train_images, rot_angles)
         rot_train_groundtruth = mirror_rotate(train_groundtruth, rot_angles)
         train_images = np.concatenate((train_images, rot_train_images))

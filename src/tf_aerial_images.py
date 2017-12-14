@@ -12,7 +12,7 @@ from constants import NUM_CHANNELS, IMG_PATCH_SIZE, FOREGROUND_THRESHOLD
 
 tf.app.flags.DEFINE_string('save_path', os.path.abspath("./runs"),
                            "Directory where to write checkpoints, overlays and submissions")
-tf.app.flags.DEFINE_string('log_dir', os.path.abspath("./log_dir"),
+tf.app.flags.DEFINE_string('logdir', os.path.abspath("./logdir"),
                            "Directory where to write logfiles")
 tf.app.flags.DEFINE_string('train_data_dir', os.path.abspath("./data/training"),
                            "Directory containing training images/ groundtruth/")
@@ -36,7 +36,7 @@ tf.app.flags.DEFINE_float('dropout', 0.8, "Probability to keep an input")
 tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-Net layer")
 tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
 tf.app.flags.DEFINE_integer('train_score_every', 1000, "Compute training score after the given number of iterations")
-tf.app.flags.DEFINE_string('rotation_angles', "15,30,45,60,85", "Rotation angles")
+tf.app.flags.DEFINE_string('rotation_angles', None, "Rotation angles")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -46,7 +46,7 @@ class Options(object):
 
     def __init__(self):
         self.save_path = FLAGS.save_path
-        self.log_dir = FLAGS.log_dir
+        self.logdir = FLAGS.logdir
         self.train_data_dir = FLAGS.train_data_dir
         self.eval_data_dir = FLAGS.eval_data_dir
         self.restore_model = FLAGS.restore_model
@@ -68,7 +68,7 @@ class Options(object):
         self.num_layers = FLAGS.num_layers
         self.root_size = FLAGS.root_size
         self.train_score_every = FLAGS.train_score_every
-        self.rotation_angles = [int(i) for i in FLAGS.rotation_angles.split(",")]
+        self.rotation_angles = None if not FLAGS.rotation_angles else [int(i) for i in FLAGS.rotation_angles.split(",")]
 
 
 class ConvolutionalModel:
@@ -87,7 +87,7 @@ class ConvolutionalModel:
 
         self.experiment_name = datetime.now().strftime("%Y-%m-%dT%Hh%Mm%Ss")
         experiment_path = os.path.abspath(os.path.join(options.save_path, self.experiment_name))
-        summary_path = os.path.join(options.log_dir, self.experiment_name)
+        summary_path = os.path.join(options.logdir, self.experiment_name)
         self.summary_writer = tf.summary.FileWriter(summary_path, session.graph)
 
     def cross_entropy_loss(self, labels, pred_logits):
@@ -188,11 +188,20 @@ class ConvolutionalModel:
 
         # data placeholders
         patches_node = tf.placeholder(tf.float32,
-                                      shape=(opts.batch_size, self.input_size, self.input_size, NUM_CHANNELS))
+                                      shape=(opts.batch_size, self.input_size, self.input_size, NUM_CHANNELS),
+                                      name="patches")
         labels_node = tf.placeholder(tf.int64,
-                                     shape=(opts.batch_size, opts.patch_size, opts.patch_size))
+                                     shape=(opts.batch_size, opts.patch_size, opts.patch_size),
+                                     name="groundtruth")
 
-        predict_logits = unet.forward(patches_node, root_size=opts.root_size, num_layers=opts.num_layers)
+        if opts.image_augmentation:
+            patches_node, labels_node = self.stochastic_data_augmentation(patches_node, labels_node)
+
+        dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
+        self._dropout_keep = dropout_keep
+
+        predict_logits = unet.forward(patches_node, root_size=opts.root_size, num_layers=opts.num_layers,
+                                      dropout_keep=dropout_keep)
         predictions = tf.nn.softmax(predict_logits, dim=3)
         predictions = predictions[:, :, :, 1]
         loss = self.cross_entropy_loss(labels_node, predict_logits)
@@ -222,6 +231,38 @@ class ConvolutionalModel:
 
         self.saver = tf.train.Saver()
 
+    def stochastic_data_augmentation(self, imgs, masks):
+        """Add stochastic transformation to imgs and masks:
+        flip_ud, flip_lr, transpose, rotation by any 90 degree
+        """
+        batch_size = int(imgs.shape[0])
+
+        def apply_transform(transform, pim):
+            proba, img, mask = pim
+            return tf.cond(proba > 0.5, lambda: transform(img), lambda: img), \
+                   tf.cond(proba > 0.5, lambda: transform(mask), lambda: mask)
+
+        def stochastic_transform(transform, imgs, masks, name):
+            proba = tf.random_uniform(shape=(batch_size,), name="should_" + name)
+            imgs, masks = tf.map_fn(lambda pim: apply_transform(tf.image.flip_up_down, pim),
+                                    [proba, imgs, masks],
+                                    dtype=(imgs.dtype, masks.dtype))
+            return imgs, masks
+
+        with tf.variable_scope("data_augm"):
+            masks = tf.expand_dims(masks, -1)
+            imgs, masks = stochastic_transform(tf.image.flip_up_down, imgs, masks, name="flip_up_down")
+            imgs, masks = stochastic_transform(tf.image.flip_left_right, imgs, masks, name="flip_up_down")
+            imgs, masks = stochastic_transform(tf.image.transpose_image, imgs, masks, name="transpose")
+
+            number_rotation = tf.cast(tf.floor(tf.random_uniform(shape=(batch_size,), name="number_rotation") * 4),
+                                      tf.int32)
+            imgs, masks = tf.map_fn(lambda kim: (tf.image.rot90(kim[1], kim[0]), tf.image.rot90(kim[2], kim[0])),
+                                    [number_rotation, imgs, masks],
+                                    dtype=(imgs.dtype, masks.dtype))
+
+        return imgs, tf.squeeze(masks, -1)
+
     def train(self, imgs, labels):
         """Train the model for one epoch
 
@@ -231,11 +272,10 @@ class ConvolutionalModel:
         """
         opts = self._options
 
-        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride, augmented=opts.image_augmentation)
+        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride)
         patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
 
-        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride,
-                                                augmented=opts.image_augmentation)
+        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride)
 
         labels_patches = (labels_patches >= 0.5) * 1.
 
