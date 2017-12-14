@@ -5,7 +5,6 @@ import matplotlib.image as mpimg
 import numpy as np
 from PIL import Image
 from scipy.ndimage.interpolation import rotate
-from typing import List
 
 from constants import PIXEL_DEPTH, FOREGROUND_THRESHOLD
 
@@ -224,7 +223,7 @@ def save_submission_csv(masks, path, patch_size):
         print("Done")
 
 
-def load_train_data(directory, rot_angles = []):
+def load_train_data(directory, rot_angles=None):
     """load images from `directory`, create patches and labels
 
     returns:
@@ -240,8 +239,8 @@ def load_train_data(directory, rot_angles = []):
 
     train_groundtruth = load(train_labels_dir)
 
-    if len(rot_angles) > 0:
-        print("Applying rotations: {} degrees.".format(",".join([str(a) for a in rot_angles])))
+    if rot_angles:
+        print("Applying rotations: {} degrees.".format(",".join(str(a) for a in rot_angles)))
         rot_train_images = mirror_rotate(train_images, rot_angles)
         rot_train_groundtruth = mirror_rotate(train_groundtruth, rot_angles)
         train_images = np.concatenate((train_images, rot_train_images))
@@ -278,12 +277,13 @@ def mirror_border(images, n):
 
     num_images, image_height, image_width, num_channel = images.shape
 
-    extended = np.pad(images, ((0,0), (n,n), (n,n), (0,0)), "symmetric")
+    extended = np.pad(images, ((0, 0), (n, n), (n, n), (0, 0)), "symmetric")
 
     if not has_channels:
         extended = np.squeeze(extended, -1)
 
     return extended
+
 
 def overlap_pred_true(pred, true):
     num_images, im_height, im_width = pred.shape
@@ -297,27 +297,24 @@ def overlap_pred_true(pred, true):
 
     return overlapped_mask
 
-def mirror_rotate(img, angles:List[int]=[15, 30, 45, 60, 85]):
-    '''
 
-    :param img:
-    :param angles:
-    :return:
-    '''
-    rotated = [_mirror_rotate_crop(img, angle)for angle in angles]
+def mirror_rotate(img, angles):
+    """TODO"""
+    rotated = [_mirror_rotate_crop(img, angle) for angle in angles]
     rot_concat = np.concatenate(rotated)
     return rot_concat
 
-def _mirror_rotate_crop(img, angle = 45):
-    assert angle > 0 and angle < 360
+
+def _mirror_rotate_crop(img, angle):
+    assert 360 > angle > 0 and angle < 360
 
     has_channels = (len(img.shape) == 4)
     if not has_channels:
         img = np.expand_dims(img, -1)
 
-    #consistency check
+    # consistency check
     num_imgs, img_height, img_width, num_channel = img.shape
-    assert img_height== img_width
+    assert img_height == img_width
 
     # mirror and extend
     ext_size = int(np.ceil(img_height * (np.sqrt(2) - 1) / 2))
@@ -332,10 +329,10 @@ def _mirror_rotate_crop(img, angle = 45):
     margin_h = int(np.floor((rot_height - img_height) / 2))
     margin_w = int(np.floor((rot_width - img_height) / 2))
 
-    rot_s = rot[:,margin_h:margin_h+img_height, margin_w:margin_w+img_width,:]
+    rot_s = rot[:, margin_h:margin_h + img_height, margin_w:margin_w + img_width, :]
     rot_s_imgs, rot_s_length, rot_s_width, rot_s_num_channel = rot_s.shape
 
-    #consistency check
+    # consistency check
     assert rot_s_length == img_height
     assert rot_s_width == img_width
 
