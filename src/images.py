@@ -58,16 +58,16 @@ def extract_patches(images, patch_size, stride=None, angles=None, predict_patch_
     assert image_height == image_width, "Assume square images"
     assert (image_height - predict_patch_size) % stride == 0, "Stride sliding should cover the whole image"
 
-    patches_per_side = int((image_height - predict_patch_size) / stride) + 1
-    num_patches = num_images * patches_per_side * patches_per_side
-
     expanded_size = image_width + 2 * predict_patch_offset
     expanded_images = rotate_and_expand(images, angles, expanded_size)
+
+    patches_per_side = int((image_height - predict_patch_size) / stride) + 1
+    num_patches = expanded_images.shape[0] * patches_per_side * patches_per_side
 
     patches = np.zeros((num_patches, patch_size, patch_size, num_channel))
 
     patch_idx = 0
-    for n in range(0, num_images):
+    for n in range(0, expanded_images.shape[0]):
         for x in range(0, expanded_size - patch_size + 1, stride):
             for y in range(0, expanded_size - patch_size + 1, stride):
                 patches[patch_idx] = expanded_images[n, y:y + patch_size, x:x + patch_size, :]
@@ -225,7 +225,7 @@ def save_submission_csv(masks, path, patch_size):
         print("Done")
 
 
-def load_train_data(directory, rot_angles=None):
+def load_train_data(directory):
     """load images from `directory`, create patches and labels
 
     returns:
@@ -317,6 +317,9 @@ def rotate_and_expand(imgs, angles, output_size=None):
     assert output_size >= height
     offset = output_size - height
     padding = int(height / 2) + int(np.ceil(offset / np.sqrt(2)))
+
+    if 0 not in angles:
+        angles = [0] + angles
 
     imgs = mirror_border(imgs, padding)
     print("Applying rotations: {} degrees... ".format(", ".join(str(a) for a in angles)))

@@ -496,7 +496,7 @@ def main(_):
             model.restore(date=opts.restore_date)
 
         if opts.num_epoch > 0:
-            train_images, train_groundtruth = images.load_train_data(opts.train_data_dir, opts.rotation_angles)
+            train_images, train_groundtruth = images.load_train_data(opts.train_data_dir)
 
             patches = images.extract_patches(train_images,
                                              patch_size=unet.input_size_needed(opts.patch_size, opts.num_layers),
@@ -504,10 +504,14 @@ def main(_):
                                              angles=opts.rotation_angles,
                                              stride=opts.stride)
 
+            print("Train on {} patches of size {}x{}".format(patches.shape[0], patches.shape[1], patches.shape[2]))
+
             labels_patches = images.extract_patches(train_groundtruth,
                                                     patch_size=opts.patch_size,
                                                     angles=opts.rotation_angles,
                                                     stride=opts.stride)
+
+            print("Train on {} groundtruth patches of size {}x{}".format(labels_patches.shape[0], labels_patches.shape[1], labels_patches.shape[2]))
 
             model.generate_eval_patch_summary(train_groundtruth)
             for i in range(opts.num_epoch):
