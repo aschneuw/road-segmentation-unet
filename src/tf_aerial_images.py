@@ -403,6 +403,7 @@ class ConvolutionalModel:
             print("Start Data Augmentation for prediction...")
             imgs = images.augment_pred_rot_and_flip(imgs)
             print("Prediction Data Augmentation done......")
+            num_images = imgs.shape[0]
 
         patches = images.extract_patches(imgs,
                                          patch_size=unet.input_size_needed(opts.patch_size, opts.num_layers),
