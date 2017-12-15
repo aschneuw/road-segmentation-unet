@@ -357,7 +357,7 @@ def crop_imgs(imgs, crop_size):
     return croped
 
 def flip_hor_imgs(imgs):
-    hor_flip = np.flip(imgs, axis = 2)
+    hor_flip = np.flip(imgs, axis=2)
     return hor_flip
 
 def flip_vert_imgs(imgs):
@@ -368,8 +368,8 @@ def augment_pred_rot_and_flip(imgs, invert = False):
     if not invert:
         hor_flip = flip_hor_imgs(imgs)
         vert_flip = flip_vert_imgs(imgs)
-        rot_imgs = rotate_and_mirror(imgs, angles=[90, 180, 270])
-        aug_imgs = np.concatenate((imgs,hor_flip, vert_flip, rot_imgs))
+        rot_imgs = rotate_and_mirror(imgs, angles=[90, 180, 270], auto_expand=False)
+        aug_imgs = np.concatenate((imgs, hor_flip, vert_flip, rot_imgs))
         assert aug_imgs.shape[0] == imgs.shape[0]*6
         return aug_imgs
 
