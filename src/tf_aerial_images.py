@@ -439,7 +439,7 @@ class ConvolutionalModel:
 
         if opts.ensemble_prediction == True:
             print("Invert Data augmentation and average predictions...")
-            masks = images.augment_pred_rot_and_flip(imgs, invert=True)
+            masks = images.augment_pred_rot_and_flip(masks, invert=True)
             print("Averaging done...")
 
         print("Prediction Done")
