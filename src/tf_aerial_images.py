@@ -37,7 +37,7 @@ tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-N
 tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
 tf.app.flags.DEFINE_integer('train_score_every', 1000, "Compute training score after the given number of iterations")
 tf.app.flags.DEFINE_string('rotation_angles', None, "Rotation angles")
-tf.app.flags.DEFINE_string('ensemble_prediction', False, "Ensemble Prediction")
+tf.app.flags.DEFINE_boolean('ensemble_prediction', False, "Ensemble Prediction")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -532,7 +532,6 @@ def main(_):
 
         if opts.interactive:
             code.interact(local=locals())
-
 
 if __name__ == '__main__':
     tf.app.run()
