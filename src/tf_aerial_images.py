@@ -37,6 +37,7 @@ tf.app.flags.DEFINE_integer('root_size', 64, "Number of filters of the first U-N
 tf.app.flags.DEFINE_integer('num_layers', 5, "Number of layers of the U-Net")
 tf.app.flags.DEFINE_integer('train_score_every', 1000, "Compute training score after the given number of iterations")
 tf.app.flags.DEFINE_string('rotation_angles', None, "Rotation angles")
+tf.app.flags.DEFINE_string('ensemble_prediction', False, "Ensemble Prediction")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -69,6 +70,7 @@ class Options(object):
         self.root_size = FLAGS.root_size
         self.train_score_every = FLAGS.train_score_every
         self.rotation_angles = None if not FLAGS.rotation_angles else [int(i) for i in FLAGS.rotation_angles.split(",")]
+        self.ensemble_prediction = FLAGS.ensemble_prediction
 
 
 class ConvolutionalModel:
@@ -397,6 +399,11 @@ class ConvolutionalModel:
         num_images = imgs.shape[0]
         print("Running prediction on {} images... ".format(num_images), end="")
 
+        if opts.ensemble_prediction == True:
+            print("Augment prediction data...")
+            imgs = images.augment_pred_rot_and_flip(imgs)
+            print("Augmentation done...")
+
         patches = images.extract_patches(imgs,
                                          patch_size=unet.input_size_needed(opts.patch_size, opts.num_layers),
                                          predict_patch_size=opts.patch_size,
@@ -428,7 +435,13 @@ class ConvolutionalModel:
         # construct masks
         new_shape = (num_images, patches_per_image, opts.patch_size, opts.patch_size, 1)
         masks = images.images_from_patches(eval_predictions.reshape(new_shape), stride=opts.stride)
-        print("Done")
+
+        if opts.ensemble_prediction == True:
+            print("Invert augmentation and average predictions...")
+            masks = images.augment_pred_rot_and_flip(imgs, invert=True)
+            print("Averaging done...")
+
+        print("Prediction Done")
         return masks
 
     def save(self, epoch=0):

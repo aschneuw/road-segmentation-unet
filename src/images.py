@@ -352,3 +352,40 @@ def crop_imgs(imgs, crop_size):
         croped = np.squeeze(croped, -1)
 
     return croped
+
+def flip_hor_imgs(imgs):
+    hor_flip = np.flip(imgs, axis = 2)
+    return hor_flip
+
+def flip_vert_imgs(imgs):
+    vert_flip = np.flip(imgs, axis=1)
+    return vert_flip
+
+def augment_pred_rot_and_flip(imgs, invert = False):
+    if not invert:
+        hor_flip = flip_hor_imgs(imgs)
+        vert_flip = flip_vert_imgs(imgs)
+        rot_imgs = rotate_and_expand(imgs, angles=[90, 180, 270])
+        aug_imgs = np.concatenate((imgs,hor_flip, vert_flip, rot_imgs))
+        assert aug_imgs.shape[0] == imgs.shape[0]*6
+        return aug_imgs
+
+    else:
+        aug_imgs = imgs
+        n_img = aug_imgs.shape[0] / 6
+        assert n_img % 1 == 0
+        n_img = int(n_img)
+
+        imgs = aug_imgs[0:n_img]
+
+        rev_aug = np.zeros((6,) + tuple(imgs.shape))
+
+        rev_aug[0] = imgs
+        rev_aug[1] = flip_hor_imgs(aug_imgs[n_img:2 * n_img])
+
+        rev_aug[2] = flip_vert_imgs(aug_imgs[n_img * 2:3 * n_img])
+
+        rev_aug[3], rev_aug[4], rev_aug[5] = tuple([rotate_and_expand(aug_imgs[(index - 1) * n_img:index * n_img], angles=[angle]) for angle, index in
+                   zip([270, 180, 90], [4, 5, 6])])
+
+        return np.average(rev_aug, axis=0)
