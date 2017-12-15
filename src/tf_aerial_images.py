@@ -400,9 +400,9 @@ class ConvolutionalModel:
         print("Running prediction on {} images... ".format(num_images), end="")
 
         if opts.ensemble_prediction == True:
-            print("Augment prediction data...")
+            print("Start Data Augmentation for prediction...")
             imgs = images.augment_pred_rot_and_flip(imgs)
-            print("Augmentation done...")
+            print("Prediction Data Augmentation done......")
 
         patches = images.extract_patches(imgs,
                                          patch_size=unet.input_size_needed(opts.patch_size, opts.num_layers),
@@ -437,7 +437,7 @@ class ConvolutionalModel:
         masks = images.images_from_patches(eval_predictions.reshape(new_shape), stride=opts.stride)
 
         if opts.ensemble_prediction == True:
-            print("Invert augmentation and average predictions...")
+            print("Invert Data augmentation and average predictions...")
             masks = images.augment_pred_rot_and_flip(imgs, invert=True)
             print("Averaging done...")
 
