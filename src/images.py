@@ -25,17 +25,28 @@ def load(directory):
     return np.asarray(images)
 
 
-def extract_patches(images, patch_size, stride=None):
+def extract_patches(images, patch_size, stride=None, angles=None, predict_patch_size=None):
     """extract square patches from a batch of images
     images:
         4D [num_images, image_height, image_width, num_channel]
         or 3D [num_images, image_height, image_width]
     patch_size:
         should divide the image width and height
+    predict_patch_size:
+        inside image than would need to be predicted (no mirror)
     returns:
         4D input: [num_patches, patch_size, patch_size, num_channel]
         3D input: [num_patches, patch_size, patch_size]
     """
+    if not predict_patch_size:
+        predict_patch_size = patch_size
+
+    if not angles:
+        angles = [0]
+
+    assert (patch_size - predict_patch_size) % 2 == 0 and predict_patch_size <= patch_size
+    predict_patch_offset = int((patch_size - predict_patch_size) / 2)
+
     if not stride:
         stride = patch_size
 
@@ -45,18 +56,21 @@ def extract_patches(images, patch_size, stride=None):
 
     num_images, image_height, image_width, num_channel = images.shape
     assert image_height == image_width, "Assume square images"
-    assert (image_height - patch_size) % stride == 0, "Stride sliding should cover the whole image"
+    assert (image_height - predict_patch_size) % stride == 0, "Stride sliding should cover the whole image"
 
-    patches_per_side = int((image_height - patch_size) / stride) + 1
+    patches_per_side = int((image_height - predict_patch_size) / stride) + 1
     num_patches = num_images * patches_per_side * patches_per_side
+
+    expanded_size = image_width + 2 * predict_patch_offset
+    expanded_images = rotate_and_expand(images, angles, expanded_size)
 
     patches = np.zeros((num_patches, patch_size, patch_size, num_channel))
 
     patch_idx = 0
     for n in range(0, num_images):
-        for x in range(0, image_width - patch_size + 1, stride):
-            for y in range(0, image_height - patch_size + 1, stride):
-                patches[patch_idx] = images[n, y:y + patch_size, x:x + patch_size, :]
+        for x in range(0, expanded_size - patch_size + 1, stride):
+            for y in range(0, expanded_size - patch_size + 1, stride):
+                patches[patch_idx] = expanded_images[n, y:y + patch_size, x:x + patch_size, :]
                 patch_idx += 1
 
     if not has_channels:
@@ -222,18 +236,7 @@ def load_train_data(directory, rot_angles=None):
     train_labels_dir = os.path.abspath(os.path.join(directory, 'groundtruth/'))
 
     train_images = load(train_data_dir)
-
-    num_images, img_height, img_width, num_channel = train_images.shape
-
     train_groundtruth = load(train_labels_dir)
-
-    if rot_angles:
-        print("Applying rotations: {} degrees.".format(", ".join(str(a) for a in rot_angles)))
-        rot_train_images = mirror_rotate(train_images, rot_angles)
-        rot_train_groundtruth = mirror_rotate(train_groundtruth, rot_angles)
-        train_images = np.concatenate((train_images, rot_train_images))
-        train_groundtruth = np.concatenate((train_groundtruth, rot_train_groundtruth))
-        print("Total images, including rotations: {}".format(train_groundtruth.shape[0]))
 
     return train_images, train_groundtruth
 
@@ -286,45 +289,66 @@ def overlap_pred_true(pred, true):
     return overlapped_mask
 
 
-def mirror_rotate(img, angles):
-    """TODO"""
-    rotated = [_mirror_rotate_crop(img, angle) for angle in angles]
-    rot_concat = np.concatenate(rotated)
-    return rot_concat
+def rotate_imgs(imgs, angle):
+    return rotate(imgs, angle=angle, axes=(1, 2), order=0)
 
 
-def _mirror_rotate_crop(img, angle):
-    assert 360 > angle > 0 and angle < 360
+def rotate_and_expand(imgs, angles, output_size=None):
+    """rottate some images by an angle, mirror image for missing part and expanding to output_size
+        4D [num_images, image_height, image_width, num_channel]
+        or 3D [num_images, image_height, image_width]
+    angles: list of angle to rotate
+    output_size: new size of image
+    returns:
+        4D input: [num_images * num_angles, output_size, output_size, num_channel]
+        3D input: [num_images * num_angles, output_size, output_size]
+    """
 
-    has_channels = (len(img.shape) == 4)
+    has_channels = (len(imgs.shape) == 4)
     if not has_channels:
-        img = np.expand_dims(img, -1)
+        imgs = np.expand_dims(imgs, -1)
 
-    # consistency check
-    num_imgs, img_height, img_width, num_channel = img.shape
-    assert img_height == img_width
+    batch_size, height, width, num_channel = imgs.shape
+    assert height == width
 
-    # mirror and extend
-    ext_size = int(np.ceil(img_height * (np.sqrt(2) - 1) / 2))
-    extended_img = mirror_border(img, ext_size)
+    if not output_size:
+        output_size = height
 
-    # rotate
-    rot = rotate(extended_img, angle=angle, axes=(1, 2), order=0)
-    rot_imgs, rot_height, rot_width, num_channel = rot.shape
-    assert rot_height == rot_width
+    assert output_size >= height
+    offset = output_size - height
+    padding = int(height / 2) + int(np.ceil(offset / np.sqrt(2)))
 
-    # crop
-    margin_h = int(np.floor((rot_height - img_height) / 2))
-    margin_w = int(np.floor((rot_width - img_height) / 2))
-
-    rot_s = rot[:, margin_h:margin_h + img_height, margin_w:margin_w + img_width, :]
-    rot_s_imgs, rot_s_length, rot_s_width, rot_s_num_channel = rot_s.shape
-
-    # consistency check
-    assert rot_s_length == img_height
-    assert rot_s_width == img_width
+    imgs = mirror_border(imgs, padding)
+    print("Applying rotations: {} degrees... ".format(", ".join(str(a) for a in angles)))
+    imgs = np.concatenate([crop_imgs(rotate_imgs(imgs, angle), output_size) for angle in angles], axis=0)
+    print("Done")
 
     if not has_channels:
-        rot_s = np.squeeze(rot_s, -1)
+        imgs = np.squeeze(imgs, -1)
 
-    return rot_s
+    return imgs
+
+
+def crop_imgs(imgs, crop_size):
+    """
+    imgs:
+        3D or 4D images batch
+    crop_size:
+        width and height of the input
+    """
+    has_channels = (len(imgs.shape) == 4)
+    if not has_channels:
+        imgs = np.expand_dims(imgs, -1)
+
+    batch_size, height, width, num_channel = imgs.shape
+    assert height == width and height >= crop_size
+
+    assert crop_size % 2 == 0
+    half_crop = int(crop_size / 2)
+    center = int(height / 2)
+    croped = imgs[:, center - half_crop:center + half_crop, center - half_crop:center + half_crop, :]
+
+    if not has_channels:
+        croped = np.squeeze(croped, -1)
+
+    return croped

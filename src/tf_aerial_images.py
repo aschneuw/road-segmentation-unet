@@ -264,12 +264,12 @@ class ConvolutionalModel:
             masks = tf.squeeze(masks, -1)
 
         imgs, masks = tf.cond(self._image_augmentation,
-                lambda: (imgs, masks),
-                lambda: (original_imgs, original_masks))
+                              lambda: (imgs, masks),
+                              lambda: (original_imgs, original_masks))
 
         return imgs, masks
 
-    def train(self, imgs, labels):
+    def train(self, patches, labels_patches, imgs, labels):
         """Train the model for one epoch
 
         params:
@@ -278,12 +278,8 @@ class ConvolutionalModel:
         """
         opts = self._options
 
-        patches = images.extract_patches(imgs, opts.patch_size, stride=opts.stride)
-        patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
-
-        labels_patches = images.extract_patches(labels, opts.patch_size, stride=opts.stride)
-
         labels_patches = (labels_patches >= 0.5) * 1.
+        labels = (labels >= 0.5) * 1.
 
         num_train_patches = patches.shape[0]
 
@@ -401,8 +397,10 @@ class ConvolutionalModel:
         num_images = imgs.shape[0]
         print("Running prediction on {} images... ".format(num_images), end="")
 
-        patches = images.extract_patches(imgs, opts.patch_size, opts.stride)
-        patches = images.mirror_border(patches, int((self.input_size - opts.patch_size) / 2))
+        patches = images.extract_patches(imgs,
+                                         patch_size=unet.input_size_needed(opts.patch_size, opts.num_layers),
+                                         predict_patch_size=opts.patch_size,
+                                         stride=opts.stride)
         num_patches = patches.shape[0]
         num_channel = imgs.shape[3]
 
@@ -486,11 +484,23 @@ def main(_):
 
         if opts.num_epoch > 0:
             train_images, train_groundtruth = images.load_train_data(opts.train_data_dir, opts.rotation_angles)
+
+            patches = images.extract_patches(train_images,
+                                             patch_size=unet.input_size_needed(opts.patch_size, opts.num_layers),
+                                             predict_patch_size=opts.patch_size,
+                                             angles=opts.rotation_angles,
+                                             stride=opts.stride)
+
+            labels_patches = images.extract_patches(train_groundtruth,
+                                                    patch_size=opts.patch_size,
+                                                    angles=opts.rotation_angles,
+                                                    stride=opts.stride)
+
             model.generate_eval_patch_summary(train_groundtruth)
             for i in range(opts.num_epoch):
                 print("==== Train epoch: {} ====".format(i))
                 tf.local_variables_initializer().run()  # Reset scores
-                model.train(train_images, train_groundtruth)  # Process one epoch
+                model.train(patches, labels_patches, train_images, train_groundtruth)  # Process one epoch
                 model.save(i)  # Save model to disk
 
         if opts.eval_data_dir:
