@@ -59,7 +59,7 @@ def extract_patches(images, patch_size, stride=None, angles=None, predict_patch_
     assert (image_height - predict_patch_size) % stride == 0, "Stride sliding should cover the whole image"
 
     expanded_size = image_width + 2 * predict_patch_offset
-    expanded_images = rotate_and_expand(images, angles, expanded_size)
+    expanded_images = rotate_and_mirror(images, angles, expanded_size)
 
     patches_per_side = int((image_height - predict_patch_size) / stride) + 1
     num_patches = expanded_images.shape[0] * patches_per_side * patches_per_side
@@ -293,7 +293,7 @@ def rotate_imgs(imgs, angle):
     return rotate(imgs, angle=angle, axes=(1, 2), order=0)
 
 
-def rotate_and_expand(imgs, angles, output_size=None):
+def rotate_and_mirror(imgs, angles, output_size=None, auto_expand=True):
     """rottate some images by an angle, mirror image for missing part and expanding to output_size
         4D [num_images, image_height, image_width, num_channel]
         or 3D [num_images, image_height, image_width]
@@ -318,7 +318,7 @@ def rotate_and_expand(imgs, angles, output_size=None):
     offset = output_size - height
     padding = int(height / 2) + int(np.ceil(offset / np.sqrt(2)))
 
-    if 0 not in angles:
+    if 0 not in angles and auto_expand is True:
         angles = [0] + angles
 
     imgs = mirror_border(imgs, padding)
@@ -368,7 +368,7 @@ def augment_pred_rot_and_flip(imgs, invert = False):
     if not invert:
         hor_flip = flip_hor_imgs(imgs)
         vert_flip = flip_vert_imgs(imgs)
-        rot_imgs = rotate_and_expand(imgs, angles=[90, 180, 270])
+        rot_imgs = rotate_and_mirror(imgs, angles=[90, 180, 270])
         aug_imgs = np.concatenate((imgs,hor_flip, vert_flip, rot_imgs))
         assert aug_imgs.shape[0] == imgs.shape[0]*6
         return aug_imgs
@@ -388,7 +388,7 @@ def augment_pred_rot_and_flip(imgs, invert = False):
 
         rev_aug[2] = flip_vert_imgs(aug_imgs[n_img * 2:3 * n_img])
 
-        rev_aug[3], rev_aug[4], rev_aug[5] = tuple([rotate_and_expand(aug_imgs[(index - 1) * n_img:index * n_img], angles=[angle]) for angle, index in
-                   zip([270, 180, 90], [4, 5, 6])])
+        rev_aug[3], rev_aug[4], rev_aug[5] = tuple([rotate_and_mirror(aug_imgs[(index - 1) * n_img:index * n_img], angles=[angle]) for angle, index in
+                                                    zip([270, 180, 90], [4, 5, 6])])
 
         return np.average(rev_aug, axis=0)
