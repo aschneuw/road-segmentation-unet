@@ -322,7 +322,7 @@ def rotate_and_mirror(imgs, angles, output_size=None, auto_expand=True):
         angles = [0] + angles
 
     imgs = mirror_border(imgs, padding)
-    print("Applying rotations: {} degrees... ".format(", ".join(str(a) for a in angles)))
+    print("Applying rotations: {} degrees... ".format(", ".join([str(a) for a in angles])))
     imgs = np.concatenate([crop_imgs(rotate_imgs(imgs, angle), output_size) for angle in angles], axis=0)
     print("Done")
 
