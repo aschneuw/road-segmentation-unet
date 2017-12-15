@@ -194,8 +194,7 @@ class ConvolutionalModel:
                                      shape=(opts.batch_size, opts.patch_size, opts.patch_size),
                                      name="groundtruth")
 
-        if opts.image_augmentation:
-            patches_node, labels_node = self.stochastic_data_augmentation(patches_node, labels_node)
+        patches_node, labels_node = self.stochastic_images_augmentation(patches_node, labels_node)
 
         dropout_keep = tf.placeholder_with_default(1.0, shape=(), name="dropout_keep")
         self._dropout_keep = dropout_keep
@@ -231,11 +230,13 @@ class ConvolutionalModel:
 
         self.saver = tf.train.Saver()
 
-    def stochastic_data_augmentation(self, imgs, masks):
+    def stochastic_images_augmentation(self, imgs, masks):
         """Add stochastic transformation to imgs and masks:
         flip_ud, flip_lr, transpose, rotation by any 90 degree
         """
+        original_imgs, original_masks = imgs, masks
         batch_size = int(imgs.shape[0])
+        self._image_augmentation = tf.placeholder_with_default(False, shape=(), name='image_augmentation_flag')
 
         def apply_transform(transform, pim):
             proba, img, mask = pim
@@ -260,8 +261,13 @@ class ConvolutionalModel:
             imgs, masks = tf.map_fn(lambda kim: (tf.image.rot90(kim[1], kim[0]), tf.image.rot90(kim[2], kim[0])),
                                     [number_rotation, imgs, masks],
                                     dtype=(imgs.dtype, masks.dtype))
+            masks = tf.squeeze(masks, -1)
 
-        return imgs, tf.squeeze(masks, -1)
+        imgs, masks = tf.cond(self._image_augmentation,
+                lambda: (imgs, masks),
+                lambda: (original_imgs, original_masks))
+
+        return imgs, masks
 
     def train(self, imgs, labels):
         """Train the model for one epoch
@@ -293,6 +299,7 @@ class ConvolutionalModel:
                 self._patches_node: patches[batch_indices, :, :, :],
                 self._labels_node: labels_patches[batch_indices],
                 self._dropout_keep: opts.dropout,
+                self._image_augmentation: opts.image_augmentation,
             }
 
             summary_str, _, l, predictions, predictions, step = self._session.run(
