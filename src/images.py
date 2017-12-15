@@ -318,7 +318,7 @@ def rotate_and_mirror(imgs, angles, output_size=None, auto_expand=True):
     offset = output_size - height
     padding = int(height / 2) + int(np.ceil(offset / np.sqrt(2)))
 
-    if 0 not in angles and auto_expand is True:
+    if (0 not in angles) and (auto_expand is True):
         angles = [0] + angles
 
     imgs = mirror_border(imgs, padding)
@@ -388,7 +388,7 @@ def augment_pred_rot_and_flip(imgs, invert = False):
 
         rev_aug[2] = flip_vert_imgs(aug_imgs[n_img * 2:3 * n_img])
 
-        rev_aug[3], rev_aug[4], rev_aug[5] = tuple([rotate_and_mirror(aug_imgs[(index - 1) * n_img:index * n_img], angles=[angle]) for angle, index in
+        rev_aug[3], rev_aug[4], rev_aug[5] = tuple([rotate_and_mirror(aug_imgs[(index - 1) * n_img:index * n_img], angles=[angle], auto_expand=False) for angle, index in
                                                     zip([270, 180, 90], [4, 5, 6])])
 
         return np.average(rev_aug, axis=0)
